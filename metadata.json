@@ -1,0 +1,6 @@
+{
+  "name": "IPTV Player Pro",
+  "description": "تطبيق متقدم واحترافي لتشغيل قنوات البث المباشر (Live TV)، الأفلام والمسلسلات وقوائم M3U وXtream Codes مع العرض المتعدد والدليل التفاعلي.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
