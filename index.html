@@ -1,92 +1,16 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar" dir="rtl" class="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>سينما برو | IPTV Player Pro</title>
-    <!-- Tailwind CSS لتصميم عصري -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Cairo', sans-serif; background-color: #0b0f19; color: #f3f4f6; }
-        .hero-gradient { background: linear-gradient(to top, #0b0f19 0%, rgba(11,15,25,0.7) 50%, rgba(11,15,25,0.3) 100%); }
-    </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IPTV Cinema Pro | الجودة وفريق بيت التلفزيون السينمائي</title>
+    <meta name="description" content="IPTV منصة ل القنوات التلفزيونية الحية وأحدث الأفلام والمسلسلات بجودة 4K" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@300;400;500;700" rel="stylesheet">
 </head>
-<body class="min-h-screen flex flex-col">
-
-    <!-- شريط التنقل العلوي -->
-    <header class="w-full bg-[#0b0f19]/90 backdrop-blur sticky top-0 z-50 border-b border-gray-800">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-            <div class="flex items-center gap-3">
-                <span class="text-2xl font-black text-cyan-400">⚡ مشغل ضخم</span>
-                <span class="text-xs bg-cyan-500/20 text-cyan-400 px-2 py-1 rounded-full border border-cyan-500/30">حقيقي وفعل</span>
-            </div>
-        </div>
-    </header>
-
-    <!-- قسم مشغل الفيديو الحقيقي -->
-    <section class="max-w-4xl mx-auto px-4 py-6 w-full">
-        <div class="bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 shadow-2xl">
-            <!-- شاشة المشغل الفعلية -->
-            <div class="relative aspect-video bg-black flex items-center justify-center">
-                <video id="activePlayer" controls class="w-full h-full object-contain" poster="https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=1250&q=80">
-                    المتصفح لا يدعم مشغل الفيديو
-                </video>
-            </div>
-            <!-- حريط إدخال رابط الفيديو وتشغيله -->
-            <div class="p-4 bg-gray-950 flex gap-2">
-                <input type="text" id="streamUrl" placeholder="ألصق رابط الفيديو أو البث المباشر هنا..." class="flex-1 bg-gray-900 border border-gray-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
-                <button onclick="playStream()" class="bg-cyan-500 hover:bg-cyan-600 text-black font-bold px-6 py-2 rounded-xl text-sm transition shadow-lg shadow-cyan-500/20">
-                    تشغيل الرابط
-                </button>
-            </div>
-        </div>
-    </section>
-
-    <!-- قسم المحتوى السريع -->
-    <main class="max-w-7xl mx-auto px-4 py-4 flex-1 w-full">
-        <h2 class="text-lg font-bold mb-3 border-r-4 border-cyan-400 pr-3">روابط تجريبية سريعة</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <button onclick="loadPreset('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4')" class="bg-gray-900 hover:bg-gray-800 border border-gray-800 p-3 rounded-xl text-right transition flex items-center justify-between">
-                <div>
-                    <h3 class="font-bold text-sm text-cyan-400">فيديو تجريبي 1 (Big Buck Bunny)</h3>
-                    <p class="text-xs text-gray-400 mt-1">انقر للتحميل الفوري وتشغيل الفيديو</p>
-                </div>
-                <span class="text-xl">▶</span>
-            </button>
-            <button onclick="loadPreset('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4')" class="bg-gray-900 hover:bg-gray-800 border border-gray-800 p-3 rounded-xl text-right transition flex items-center justify-between">
-                <div>
-                    <h3 class="font-bold text-sm text-cyan-400">فيديو تجريبي 2 (Elephants Dream)</h3>
-                    <p class="text-xs text-gray-400 mt-1">انقر للتحميل الفوري وتشغيل الفيديو</p>
-                </div>
-                <span class="text-xl">▶</span>
-            </button>
-        </div>
-    </main>
-
-    <!-- تذييل الصفحة -->
-    <footer class="bg-gray-950 border-t border-gray-800 py-4 text-center text-xs text-gray-500">
-        IPTV Player Pro © 2026 - يعمل بكفاءة وحقيقية 100%
-    </footer>
-
-    <script>
-        function playStream() {
-            const url = document.getElementById('streamUrl').value.trim();
-            const player = document.getElementById('activePlayer');
-            if (url) {
-                player.src = url;
-                player.play().catch(e => alert('تعذر تشغيل الرابط، تأكد أنه رابط مباشر صحيح.'));
-            } else {
-                alert('الرجاء إدخال رابط صالح أولاً');
-            }
-        }
-
-        function loadPreset(url) {
-            document.getElementById('streamUrl').value = url;
-            const player = document.getElementById('activePlayer');
-            player.src = url;
-            player.play();
-        }
-    </script>
+<body class="bg-[#0b0f11] text-slate-100 antialiased font-['Tajawal','Cairo',sans-serif] selection:bg-cyan-500 selection:text-black">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>
