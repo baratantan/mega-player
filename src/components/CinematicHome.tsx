@@ -9,12 +9,14 @@ import {
   Sparkles, 
   Flame, 
   TrendingUp,
-  History
+  History,
+  Baby
 } from 'lucide-react';
 import { PlaylistItem, MainNavView, WatchProgress } from '../types';
 import { Language, translations } from '../utils/translations';
 import { HeroBillboard } from './HeroBillboard';
 import { ContentCarousel } from './ContentCarousel';
+import { useIptv } from '../context/IptvContext';
 
 interface CinematicHomeProps {
   channels: PlaylistItem[];
@@ -26,6 +28,7 @@ interface CinematicHomeProps {
   onOpenDetails: (item: PlaylistItem) => void;
   onToggleFavorite: (id: string) => void;
   onSelectTab: (tab: MainNavView) => void;
+  onOpenAddModal?: (tab?: 'url' | 'file' | 'xtream' | 'preset') => void;
   lang: Language;
 }
 
@@ -39,9 +42,11 @@ export const CinematicHome: React.FC<CinematicHomeProps> = ({
   onOpenDetails,
   onToggleFavorite,
   onSelectTab,
+  onOpenAddModal,
   lang,
 }) => {
   const t = translations[lang];
+  const { isKidsMode, activeProfile, isChannelsLoading, switchProfile } = useIptv();
 
   // Dynamic ambient backdrop based on hovered item
   const [hoveredBackdrop, setHoveredBackdrop] = useState<string | null>(null);
@@ -51,18 +56,11 @@ export const CinematicHome: React.FC<CinematicHomeProps> = ({
     const fromProgress = watchProgressList
       .filter(p => !p.completed && p.currentTime > 5)
       .map(p => {
-        const found = channels.find(c => c.id === p.id);
+        const found = channels.find(c => c.id === p.itemId);
         if (found) return found;
-        return {
-          id: p.id,
-          name: p.name,
-          url: p.url,
-          logo: p.logo,
-          backdrop: p.backdrop,
-          category: p.category,
-          group: p.group || 'VOD',
-        } as PlaylistItem;
-      });
+        return p.item;
+      })
+      .filter(Boolean) as PlaylistItem[];
 
     const combined: PlaylistItem[] = [...fromProgress];
     for (const r of recentChannels) {
@@ -70,16 +68,92 @@ export const CinematicHome: React.FC<CinematicHomeProps> = ({
         combined.push(r);
       }
     }
-    return combined;
+    return combined.slice(0, 20);
   }, [watchProgressList, channels, recentChannels]);
 
-  // Group items by category & attributes
-  const featuredBillboardItems = channels.filter(c => c.backdrop || c.rating);
-  const liveChannels = channels.filter(c => c.category === 'live');
-  const movieChannels = channels.filter(c => c.category === 'movie');
-  const seriesChannels = channels.filter(c => c.category === 'series');
-  const radioChannels = channels.filter(c => c.category === 'radio');
-  const favoriteItems = channels.filter(c => favorites.includes(c.id));
+  // Group items by category & attributes (memoized)
+  const liveChannels = useMemo(() => channels.filter(c => c.category === 'live'), [channels]);
+  const movieChannels = useMemo(() => channels.filter(c => c.category === 'movie'), [channels]);
+  const seriesChannels = useMemo(() => channels.filter(c => c.category === 'series'), [channels]);
+  const radioChannels = useMemo(() => channels.filter(c => c.category === 'radio'), [channels]);
+
+  const featuredBillboardItems = useMemo(() => {
+    const withArt = channels.filter(c => c.backdrop || (c.category !== 'live' && c.logo) || c.rating);
+    if (withArt.length > 0) return withArt.slice(0, 8);
+    return channels.slice(0, 8);
+  }, [channels]);
+
+  // If channels are loading in the background from IndexedDB
+  const isWaitingForChannels = isChannelsLoading || (activeProfile && (activeProfile.channelCount || 0) > 0 && channels.length === 0);
+
+  if (channels.length === 0) {
+    return (
+      <div className="relative min-h-screen bg-[#050811] text-white pt-28 pb-20 px-4 flex flex-col items-center justify-center text-center">
+        {/* Dynamic Background Glow */}
+        <div className="fixed inset-0 pointer-events-none z-0 opacity-20 blur-3xl bg-gradient-to-tr from-cyan-900 via-slate-900 to-indigo-950" />
+
+        <div className="relative z-10 max-w-md w-full p-8 rounded-3xl bg-slate-900/80 border border-white/10 backdrop-blur-2xl shadow-2xl flex flex-col items-center gap-5">
+          {isWaitingForChannels ? (
+            <>
+              <div className="relative flex items-center justify-center">
+                <div className="w-16 h-16 border-4 border-cyan-500/20 border-t-cyan-400 rounded-full animate-spin shadow-xl shadow-cyan-500/30" />
+                <Tv className="w-7 h-7 text-cyan-400 absolute" />
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="text-lg font-black text-white">
+                  {lang === 'ar' ? 'جاري تجهيز ومزامنة القنوات...' : 'Loading Subscription Channels...'}
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  {lang === 'ar'
+                    ? `جاري قراءة بيانات باقة "${activeProfile?.name || 'الباقة'}" وحفظها في الذاكرة السريعة دون استهلاك لموارد الهاتف.`
+                    : `Loading channels for "${activeProfile?.name || 'Subscription'}" into local high-speed cache.`}
+                </p>
+              </div>
+
+              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                <div className="bg-gradient-to-r from-cyan-400 to-blue-500 h-full w-2/3 animate-pulse rounded-full" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="w-16 h-16 rounded-2xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center border border-cyan-500/30">
+                <Tv className="w-8 h-8" />
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="text-lg font-black text-white">
+                  {lang === 'ar' ? 'لا توجد قنوات في هذه الباقة' : 'No Channels in this Playlist'}
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'يمكنك إضافة اشتراك جديد (Xtream / M3U) أو التبديل إلى باقة Cinema Pro الافتراضية.'
+                    : 'Add a new subscription or switch back to the Cinema Pro default playlist.'}
+                </p>
+              </div>
+
+              <div className="flex flex-col w-full gap-2.5 pt-2">
+                {onOpenAddModal && (
+                  <button
+                    onClick={() => onOpenAddModal('url')}
+                    className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-600 text-slate-950 font-black text-xs shadow-lg shadow-cyan-500/25 transition active:scale-95"
+                  >
+                    {lang === 'ar' ? '+ إضافة اشتراك أو ملف' : '+ Add Playlist'}
+                  </button>
+                )}
+                <button
+                  onClick={() => switchProfile('default_preset')}
+                  className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/10 transition"
+                >
+                  {lang === 'ar' ? 'تشغيل الباقة الافتراضية (Cinema Pro)' : 'Switch to Default Preset'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative min-h-screen bg-[#050811] text-white pb-20 overflow-x-hidden">
@@ -103,6 +177,30 @@ export const CinematicHome: React.FC<CinematicHomeProps> = ({
           onToggleFavorite={onToggleFavorite}
           lang={lang}
         />
+
+        {/* Kids Mode Safe Viewing Banner */}
+        {isKidsMode && (
+          <div className="max-w-[1700px] mx-auto px-4 sm:px-8 lg:px-12">
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-950/60 via-slate-900 to-indigo-950/60 border border-purple-500/40 flex items-center justify-between gap-4 shadow-xl shadow-purple-950/30">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center justify-center shrink-0">
+                  <Baby className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>{lang === 'ar' ? 'وضع الأطفال والعائلة نَشِط' : 'Kids Mode Active'}</span>
+                    <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full border border-purple-500/30 font-bold">
+                      {lang === 'ar' ? 'محتوى آمن 100%' : 'Family Safe'}
+                    </span>
+                  </h4>
+                  <p className="text-xs text-slate-400">
+                    {lang === 'ar' ? 'تمت تصفية القنوات والأفلام لتناسب الأطفال والعائلة مع قفل الباقات الحساسة تلقائياً.' : 'Channels & VOD are filtered for safe family viewing.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 2. Fast Access Category Hub Pills (Cinema / Live / Series / Multi-View) */}
         <div className="max-w-[1700px] mx-auto px-4 sm:px-8 lg:px-12">

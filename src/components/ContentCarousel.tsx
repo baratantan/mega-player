@@ -51,6 +51,9 @@ export const ContentCarousel: React.FC<ContentCarouselProps> = ({
 
   if (items.length === 0) return null;
 
+  // Safeguard: Never render more than 30 items in a single horizontal carousel track on the home screen
+  const displayItems = items.slice(0, 30);
+
   return (
     <section className="space-y-3 sm:space-y-4 px-4 sm:px-8 lg:px-12">
       {/* Row Header */}
@@ -96,7 +99,7 @@ export const ContentCarousel: React.FC<ContentCarouselProps> = ({
         className="flex items-center gap-4 sm:gap-5 overflow-x-auto pb-4 pt-2 -mx-2 px-2 scrollbar-none snap-x snap-mandatory"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
-        {items.map((item) => {
+        {displayItems.map((item) => {
           const isFav = favorites.includes(item.id);
 
           return (

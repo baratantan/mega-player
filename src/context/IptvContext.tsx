@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useCall
 import { PlaylistItem, PlaylistProfile, MediaCategory, WatchProgress } from '../types';
 import { iptvService, IptvLoadProgress, PRESET_PLAYLISTS, PresetPlaylist } from '../services/iptvService';
 import { storageService } from '../services/storageService';
+import { dbService } from '../services/dbService';
 import { DEFAULT_CHANNELS } from '../data/defaultChannels';
 
 export interface IptvToast {
@@ -30,6 +31,7 @@ interface IptvContextType {
   profiles: PlaylistProfile[];
   activeProfile: PlaylistProfile | null;
   isLoading: boolean;
+  isChannelsLoading: boolean;
   loadProgress: IptvLoadProgress | null;
   error: string | null;
 
@@ -61,6 +63,15 @@ interface IptvContextType {
   // Visual Toasts & Alerts
   toast: IptvToast | null;
   showToast: (title: string, subtitle?: string, type?: IptvToast['type']) => void;
+
+  // Parental Control & Kids Mode (الملف العائلي وقفل الأمان الأبوي)
+  isKidsMode: boolean;
+  toggleKidsMode: (pinAttempt?: string) => { success: boolean; error?: string };
+  parentalPin: string;
+  setParentalPin: (newPin: string) => void;
+  lockedCategories: string[];
+  toggleCategoryLock: (categoryName: string) => void;
+  isCategoryLocked: (categoryName: string) => boolean;
 }
 
 const IptvContext = createContext<IptvContextType | null>(null);
@@ -85,9 +96,124 @@ export const IptvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return profiles.find(p => p.id === activeProfileId) || profiles[0] || null;
   }, [profiles, activeProfileId]);
 
-  const channels = useMemo(() => {
-    return activeProfile?.channels || DEFAULT_CHANNELS;
+  const rawChannels = useMemo(() => {
+    if (activeProfile?.channels && activeProfile.channels.length > 0) {
+      return activeProfile.channels;
+    }
+    // If active profile is a custom user subscription, do not falsely show default channels
+    if (activeProfile && activeProfile.id !== 'default_preset') {
+      return activeProfile.channels || [];
+    }
+    return DEFAULT_CHANNELS;
   }, [activeProfile]);
+
+  // Loading state for background IndexedDB channel fetching
+  const [isChannelsLoading, setIsChannelsLoading] = useState<boolean>(false);
+  const loadingProfilesRef = React.useRef<Set<string>>(new Set());
+
+  // Asynchronously load channels from IndexedDB for custom profile if not in memory
+  useEffect(() => {
+    if (!activeProfileId || activeProfileId === 'default_preset') {
+      setIsChannelsLoading(false);
+      return;
+    }
+
+    const currentProf = profiles.find(p => p.id === activeProfileId);
+    if (!currentProf) return;
+
+    if (!currentProf.channels || currentProf.channels.length === 0) {
+      if (loadingProfilesRef.current.has(activeProfileId)) return;
+      loadingProfilesRef.current.add(activeProfileId);
+      setIsChannelsLoading(true);
+
+      dbService.getChannels(activeProfileId).then(loadedChannels => {
+        setIsChannelsLoading(false);
+        if (loadedChannels && loadedChannels.length > 0) {
+          setProfiles(prev =>
+            prev.map(p => (p.id === activeProfileId ? { ...p, channels: loadedChannels } : p))
+          );
+        }
+      }).catch(err => {
+        setIsChannelsLoading(false);
+        console.warn('Failed to load profile channels from DB:', err);
+      });
+    } else {
+      setIsChannelsLoading(false);
+    }
+  }, [activeProfileId, profiles]);
+
+  // Kids Mode & Parental Controls State
+  const [isKidsMode, setIsKidsMode] = useState<boolean>(() => {
+    return localStorage.getItem('iptv_kids_mode_active') === 'true';
+  });
+
+  const [parentalPin, setParentalPinState] = useState<string>(() => {
+    return localStorage.getItem('iptv_parental_pin') || '0000';
+  });
+
+  const [lockedCategories, setLockedCategories] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('iptv_locked_categories');
+      return stored ? JSON.parse(stored) : ['Adult', '+18', 'XXX', 'إثارة'];
+    } catch {
+      return ['Adult', '+18', 'XXX'];
+    }
+  });
+
+  const setParentalPin = useCallback((pin: string) => {
+    setParentalPinState(pin);
+    localStorage.setItem('iptv_parental_pin', pin);
+  }, []);
+
+  const toggleCategoryLock = useCallback((catName: string) => {
+    setLockedCategories(prev => {
+      const next = prev.includes(catName) ? prev.filter(c => c !== catName) : [...prev, catName];
+      localStorage.setItem('iptv_locked_categories', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const isCategoryLocked = useCallback((catName: string): boolean => {
+    return lockedCategories.includes(catName);
+  }, [lockedCategories]);
+
+  // Safe Kids keywords
+  const KIDS_SAFE_KEYWORDS = useMemo(() => [
+    'اطفال', 'أطفال', 'كرتون', 'انمي', 'أنمي', 'براعم', 'سبيستون', 'disney', 'kids', 'animation', 
+    'cartoon', 'spacetoon', 'nickelodeon', 'family', 'عائلي', 'ناشونال', 'وثائقية', 'documentary', 
+    'طبيعة', 'nature', 'science', 'علوم', 'قرآن', 'إسلامية', 'majestic', 'cartoon network', 'cn', 'bunny', 'sintel'
+  ], []);
+
+  const ADULT_KEYWORDS = useMemo(() => ['+18', 'xxx', 'adult', 'مثير', '18+', 'for adults', 'porn'], []);
+
+  // Filter channels based on Kids Mode & Locked Categories
+  const channels = useMemo(() => {
+    return rawChannels.filter(item => {
+      const groupLower = (item.group || '').toLowerCase();
+      const nameLower = (item.name || '').toLowerCase();
+
+      // Check if category is individually locked by parental control
+      if (lockedCategories.some(locked => locked.toLowerCase() === groupLower)) {
+        return false;
+      }
+
+      // If Kids Mode is active, restrict strictly to family/kids safe items
+      if (isKidsMode) {
+        if (ADULT_KEYWORDS.some(k => groupLower.includes(k) || nameLower.includes(k))) {
+          return false;
+        }
+
+        if (item.isKidsSafe) return true;
+
+        const isSafeGroup = KIDS_SAFE_KEYWORDS.some(k => groupLower.includes(k) || nameLower.includes(k));
+        const isSafeGenre = item.genres?.some(g => KIDS_SAFE_KEYWORDS.some(k => g.toLowerCase().includes(k)));
+
+        return isSafeGroup || !!isSafeGenre;
+      }
+
+      return true;
+    });
+  }, [rawChannels, isKidsMode, lockedCategories, KIDS_SAFE_KEYWORDS, ADULT_KEYWORDS]);
 
   // Loading & Progress State
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -257,6 +383,24 @@ export const IptvProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const clearRecents = useCallback(() => {
     setRecents([]);
   }, []);
+
+  // Toggle Kids Mode with Parental PIN validation
+  const toggleKidsMode = useCallback((pinAttempt?: string): { success: boolean; error?: string } => {
+    if (isKidsMode) {
+      if (pinAttempt !== parentalPin) {
+        return { success: false, error: 'رمز PIN غير صحيح. يرجى المحاولة مجدداً.' };
+      }
+      setIsKidsMode(false);
+      localStorage.setItem('iptv_kids_mode_active', 'false');
+      showToast('تم إيقاف وضع الأطفال 🔓', 'تمت استعادة كافة القنوات والمحتوى الكامل', 'info');
+      return { success: true };
+    } else {
+      setIsKidsMode(true);
+      localStorage.setItem('iptv_kids_mode_active', 'true');
+      showToast('تم تفعيل وضع الأطفال 👶✨', 'تم قفل المحتوى المخصص للبالغين وعرض المحتوى العائلي فقط', 'info');
+      return { success: true };
+    }
+  }, [isKidsMode, parentalPin, showToast]);
 
   // Switch Active Profile
   const switchProfile = useCallback((profileId: string) => {
@@ -430,6 +574,7 @@ export const IptvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     profiles,
     activeProfile,
     isLoading,
+    isChannelsLoading,
     loadProgress,
     error,
     importM3uUrl,
@@ -453,6 +598,13 @@ export const IptvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clearRecents,
     toast,
     showToast,
+    isKidsMode,
+    toggleKidsMode,
+    parentalPin,
+    setParentalPin,
+    lockedCategories,
+    toggleCategoryLock,
+    isCategoryLocked,
   }), [
     channels,
     liveChannels,
@@ -464,6 +616,7 @@ export const IptvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     profiles,
     activeProfile,
     isLoading,
+    isChannelsLoading,
     loadProgress,
     error,
     importM3uUrl,
@@ -487,6 +640,13 @@ export const IptvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clearRecents,
     toast,
     showToast,
+    isKidsMode,
+    toggleKidsMode,
+    parentalPin,
+    setParentalPin,
+    lockedCategories,
+    toggleCategoryLock,
+    isCategoryLocked,
   ]);
 
   return (

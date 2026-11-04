@@ -14,7 +14,7 @@ async function startServer() {
     res.json({ status: 'ok', time: new Date().toISOString() });
   });
 
-  // Proxy endpoint to bypass CORS for M3U playlist URLs or EPG XML
+  // Proxy endpoint to bypass CORS and Mixed-Content for M3U playlists, EPG, and HLS segments
   app.get('/api/proxy', async (req, res) => {
     const targetUrl = req.query.url as string;
     if (!targetUrl) {
@@ -36,16 +36,109 @@ async function startServer() {
         });
       }
 
-      // Pass content type
-      const contentType = response.headers.get('content-type') || 'text/plain';
-      res.setHeader('Content-Type', contentType);
+      const contentType = response.headers.get('content-type') || 'application/octet-stream';
       res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
 
-      const data = await response.text();
-      res.send(data);
+      const isM3u8 = contentType.includes('mpegurl') || 
+                     contentType.includes('application/vnd.apple.mpegurl') || 
+                     contentType.includes('application/x-mpegurl') ||
+                     targetUrl.toLowerCase().includes('.m3u8');
+
+      if (isM3u8) {
+        const text = await response.text();
+        if (text.trim().startsWith('#EXTM3U') || text.includes('#EXTINF') || text.includes('#EXT-X-')) {
+          // Rewrite manifest lines so every segment & sub-manifest flows through /api/proxy
+          const baseUrl = new URL(targetUrl);
+          const rewrittenLines = text.split('\n').map(line => {
+            const trimmed = line.trim();
+            if (!trimmed) return line;
+
+            // Rewrite EXT-X-KEY or EXT-X-MAP URI="url"
+            if (trimmed.startsWith('#EXT-X-KEY') || trimmed.startsWith('#EXT-X-MAP')) {
+              return trimmed.replace(/URI=["']([^"']+)["']/g, (_, uri) => {
+                try {
+                  const absUri = new URL(uri, baseUrl).toString();
+                  return `URI="/api/proxy?url=${encodeURIComponent(absUri)}"`;
+                } catch {
+                  return `URI="${uri}"`;
+                }
+              });
+            }
+
+            // Other comment or tag lines
+            if (trimmed.startsWith('#')) {
+              return line;
+            }
+
+            // Chunk / Segment / Sub-playlist URL
+            try {
+              const absUrl = new URL(trimmed, baseUrl).toString();
+              return `/api/proxy?url=${encodeURIComponent(absUrl)}`;
+            } catch {
+              return line;
+            }
+          });
+
+          res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+          return res.send(rewrittenLines.join('\n'));
+        }
+        res.setHeader('Content-Type', contentType);
+        return res.send(text);
+      }
+
+      res.setHeader('Content-Type', contentType);
+      const arrayBuffer = await response.arrayBuffer();
+      res.send(Buffer.from(arrayBuffer));
     } catch (err: any) {
       console.error('Proxy error:', err);
       res.status(500).json({ error: 'Failed to proxy request', message: err?.message });
+    }
+  });
+
+  // Fast diagnostic check for any stream URL
+  app.get('/api/stream-check', async (req, res) => {
+    const targetUrl = req.query.url as string;
+    if (!targetUrl) {
+      return res.status(400).json({ error: 'URL is required' });
+    }
+
+    const startTime = Date.now();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6000);
+
+      const response = await fetch(targetUrl, {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 IPTVPlayerPro/2.0',
+          'Range': 'bytes=0-2048',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      const latencyMs = Date.now() - startTime;
+      const contentType = response.headers.get('content-type') || '';
+
+      return res.json({
+        status: response.status,
+        ok: response.ok,
+        statusText: response.statusText,
+        contentType,
+        latencyMs,
+        is404: response.status === 404,
+        is403: response.status === 403,
+      });
+    } catch (err: any) {
+      return res.json({
+        status: 0,
+        ok: false,
+        statusText: err?.name === 'AbortError' ? 'Timeout (6s)' : (err?.message || 'Network unreachable'),
+        latencyMs: Date.now() - startTime,
+        is404: false,
+        is403: false,
+      });
     }
   });
 
@@ -97,6 +190,9 @@ async function startServer() {
       res.status(500).json({ error: 'Failed to connect to Xtream Codes server', message: err?.message });
     }
   });
+
+  // Serve public static assets (manifest, icons, images)
+  app.use(express.static(path.join(process.cwd(), 'public')));
 
   // Vite middleware for development vs static build in production
   if (process.env.NODE_ENV !== 'production') {

@@ -20,10 +20,12 @@ import {
   ChevronRight,
   Info,
   Sparkles,
-  Radio
+  Radio,
+  List
 } from 'lucide-react';
 import { PlaylistItem, EpgProgram } from '../types';
 import { Language, translations } from '../utils/translations';
+import { errorLogService } from '../services/errorLogService';
 
 interface TivimateLiveTvProps {
   channels: PlaylistItem[];
@@ -80,7 +82,13 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
   }, [liveChannels]);
 
   // State
-  const [viewMode, setViewMode] = useState<'grid' | 'split'>('grid');
+  // State: support grid, split, and mobile-friendly list mode
+  const [viewMode, setViewMode] = useState<'grid' | 'split' | 'list'>(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      return 'list';
+    }
+    return 'grid';
+  });
   const [selectedGroup, setSelectedGroup] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedChannel, setSelectedChannel] = useState<PlaylistItem>(() => {
@@ -97,12 +105,12 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
   // References for smooth scrolling
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Live clock and current hour calculation
+  // Live clock and current hour calculation (throttled to 30s to prevent CPU overhead)
   const [nowDate, setNowDate] = useState<Date>(new Date());
   useEffect(() => {
     const interval = setInterval(() => {
       setNowDate(new Date());
-    }, 1000);
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -132,11 +140,22 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
     });
   }, [liveChannels, selectedGroup, searchQuery, favorites]);
 
-  // Generate continuous timeline program blocks for every channel
+  // Progressive rendering / pagination: render initial 50 channels to avoid main-thread freeze
+  const [visibleCount, setVisibleCount] = useState<number>(50);
+
+  useEffect(() => {
+    setVisibleCount(50);
+  }, [selectedGroup, searchQuery]);
+
+  const visibleChannels = useMemo(() => {
+    return filteredChannels.slice(0, visibleCount);
+  }, [filteredChannels, visibleCount]);
+
+  // Generate continuous timeline program blocks ONLY for currently visible channels
   const channelSchedules = useMemo(() => {
     const map = new Map<string, MatrixProgram[]>();
 
-    filteredChannels.forEach(channel => {
+    visibleChannels.forEach(channel => {
       const progs: MatrixProgram[] = [];
       const grp = channel.group.toLowerCase();
       const isSports = grp.includes('sport') || grp.includes('رياض');
@@ -279,11 +298,27 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
+          errorLogService.logPlayerError({
+            channelName: selectedChannel?.name,
+            channelUrl: streamUrl,
+            errorCode: data.details || 'HLS_FATAL_ERROR',
+            message: `TiviMate Preview HLS Error: ${data.type}`,
+            details: `Fatal: ${data.fatal} | Attempting proxy fallback`,
+          });
           hls.loadSource(`/api/proxy?url=${encodeURIComponent(streamUrl)}`);
         }
       });
     } else {
       video.src = streamUrl;
+      video.onerror = () => {
+        errorLogService.logPlayerError({
+          channelName: selectedChannel?.name,
+          channelUrl: streamUrl,
+          errorCode: video.error?.code ? `MEDIA_ERR_${video.error.code}` : 'HTML5_VIDEO_ERROR',
+          message: 'TiviMate preview native video error',
+          details: `Source: ${streamUrl}`,
+        });
+      };
       video.play().catch(() => {});
       setIsPreviewLoading(false);
     }
@@ -326,65 +361,83 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
       <motion.div 
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="h-14 px-4 sm:px-8 bg-black/50 border-b border-white/10 flex items-center justify-between shrink-0 gap-3"
+        className="h-14 px-3 sm:px-6 lg:px-8 bg-black/60 border-b border-white/10 flex items-center justify-between shrink-0 gap-2 sm:gap-3"
       >
         {/* Left: Breadcrumb & Title */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={onBackToHome}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 hover:text-white border border-white/[0.08] text-xs font-semibold transition cursor-pointer"
+            className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 hover:text-white border border-white/[0.08] text-xs font-semibold transition cursor-pointer"
           >
             {isRtl ? <ArrowRight className="w-3.5 h-3.5" /> : <ArrowLeft className="w-3.5 h-3.5" />}
-            <span>{isRtl ? 'الرئيسية' : 'Home'}</span>
+            <span className="hidden xs:inline">{isRtl ? 'الرئيسية' : 'Home'}</span>
           </motion.button>
           
           <span className="text-white/20 hidden sm:inline">/</span>
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shadow-md shadow-red-500" />
-            <span className="text-xs sm:text-sm font-black text-white uppercase tracking-wider hidden sm:inline">
-              TiviMate EPG Matrix
+            <span className="text-xs sm:text-sm font-black text-white uppercase tracking-wider hidden md:inline">
+              TiviMate Pro
             </span>
           </div>
         </div>
 
-        {/* Center: View Switcher Tabs (EPG Grid Matrix vs 3-Column Split) */}
-        <div className="flex items-center p-1 rounded-xl bg-black/60 border border-white/10 shadow-inner">
+        {/* Center: View Switcher Tabs (List vs EPG Grid Matrix vs 3-Column Split) */}
+        <div className="flex items-center p-0.5 sm:p-1 rounded-xl bg-black/70 border border-white/10 shadow-inner">
+          <button
+            onClick={() => setViewMode('list')}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              viewMode === 'list'
+                ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 shadow-md shadow-cyan-500/30'
+                : 'text-slate-400 hover:text-white'
+            }`}
+            title={isRtl ? 'قائمة القنوات (عرض رأسي خفيف)' : 'Channel List'}
+          >
+            <List className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{isRtl ? 'قائمة القنوات' : 'List'}</span>
+            <span className="sm:hidden">{isRtl ? 'قائمة' : 'List'}</span>
+          </button>
+
           <button
             onClick={() => setViewMode('grid')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               viewMode === 'grid'
                 ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 shadow-md shadow-cyan-500/30'
                 : 'text-slate-400 hover:text-white'
             }`}
+            title={isRtl ? 'شبكة جدول البث التفاعلية' : 'EPG Matrix'}
           >
             <LayoutGrid className="w-3.5 h-3.5" />
-            <span>{isRtl ? 'شبكة جدول البث (EPG Grid)' : 'EPG Matrix'}</span>
+            <span className="hidden sm:inline">{isRtl ? 'شبكة EPG' : 'EPG Matrix'}</span>
+            <span className="sm:hidden">EPG</span>
           </button>
 
           <button
             onClick={() => setViewMode('split')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+            className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
               viewMode === 'split'
                 ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 shadow-md shadow-cyan-500/30'
                 : 'text-slate-400 hover:text-white'
             }`}
+            title={isRtl ? 'المعاينة الثلاثية مع المشغل' : 'Split View'}
           >
             <Columns3 className="w-3.5 h-3.5" />
-            <span>{isRtl ? 'المعاينة الثلاثية' : 'Split View'}</span>
+            <span className="hidden sm:inline">{isRtl ? 'المعاينة الثلاثية' : 'Split'}</span>
+            <span className="sm:hidden">{isRtl ? 'معاينة' : 'Split'}</span>
           </button>
         </div>
 
         {/* Right: Search, Jump to Now & Live Clock */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           {viewMode === 'grid' && (
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={scrollToNow}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-black transition cursor-pointer shadow-sm shadow-cyan-500/20"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-black transition cursor-pointer shadow-sm"
               title={isRtl ? 'الانتقال إلى الوقت الحالي في الجدول' : 'Jump to Current Time'}
             >
               <Clock className="w-3.5 h-3.5" />
@@ -392,14 +445,14 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
             </motion.button>
           )}
 
-          <div className="relative w-36 sm:w-56">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute start-3 top-2.5" />
+          <div className="relative w-28 xs:w-36 sm:w-56">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute start-2.5 top-2.5" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t.searchPlaceholder}
-              className="w-full ps-8 pe-3 py-1.5 text-xs bg-white/[0.04] text-white rounded-xl border border-white/[0.08] focus:outline-none focus:border-cyan-500 transition-colors"
+              className="w-full ps-7 pe-6 py-1.5 text-xs bg-white/[0.04] text-white rounded-xl border border-white/[0.08] focus:outline-none focus:border-cyan-500 transition-colors"
             />
             {searchQuery && (
               <button
@@ -411,7 +464,7 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
             )}
           </div>
 
-          <span className="text-xs font-mono font-black text-cyan-400 hidden sm:inline px-2.5 py-1 rounded-lg bg-cyan-950/40 border border-cyan-500/20">
+          <span className="text-xs font-mono font-black text-cyan-400 hidden lg:inline px-2.5 py-1 rounded-lg bg-cyan-950/40 border border-cyan-500/20">
             {currentTimeString}
           </span>
         </div>
@@ -458,9 +511,146 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* MODE 1: FULL EPG TIMELINE GRID MATRIX (Sticky Channel Column on the Right) */}
+      {/* MODE 1: VERTICAL CHANNEL LIST (Mobile & Quick-Browsing Optimized) */}
       {/* ========================================================================= */}
-      {viewMode === 'grid' ? (
+      {viewMode === 'list' ? (
+        <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden bg-[#050811]">
+          {/* Main Channel Cards Container */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6 space-y-3">
+            {filteredChannels.length === 0 ? (
+              <div className="h-64 flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                <Tv className="w-12 h-12 text-slate-600 mb-3" />
+                <h3 className="text-sm font-bold text-slate-300">{isRtl ? 'لا توجد قنوات مطابقة' : 'No channels found'}</h3>
+                <p className="text-xs text-slate-500 mt-1">{isRtl ? 'جرب البحث بكلمة أخرى أو تغيير الفئة المختارة' : 'Try searching another keyword or changing the category'}</p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 sm:gap-3">
+                  {visibleChannels.map((channel, cIdx) => {
+                    const isFav = favorites.includes(channel.id);
+                    const isSelected = selectedChannel?.id === channel.id;
+
+                    return (
+                      <div
+                        key={channel.id}
+                        onClick={() => setSelectedChannel(channel)}
+                        className={`group p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                          isSelected
+                            ? 'bg-gradient-to-r from-cyan-950/70 via-[#0b162c] to-[#070e1c] border-cyan-500/60 shadow-lg shadow-cyan-950/40 ring-1 ring-cyan-500/30'
+                            : 'bg-[#0a0f1e]/80 hover:bg-[#0e162b] border-white/5 hover:border-white/15'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="text-[11px] font-mono font-bold text-slate-500 w-5 text-center shrink-0">
+                            {cIdx + 1}
+                          </span>
+
+                          <div className="relative w-12 h-12 rounded-xl bg-black/80 border border-white/10 p-1 flex items-center justify-center shrink-0 overflow-hidden">
+                            {channel.logo ? (
+                              <img src={channel.logo} alt="" className="w-full h-full object-contain" />
+                            ) : (
+                              <Tv className="w-6 h-6 text-slate-500" />
+                            )}
+                            <span className="absolute bottom-1 end-1 w-2 h-2 rounded-full bg-red-500 ring-2 ring-black animate-pulse" />
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <h4 className={`text-xs sm:text-sm font-black truncate ${isSelected ? 'text-cyan-300' : 'text-white'}`}>
+                                {channel.name}
+                              </h4>
+                              {channel.resolution && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-black/90 text-cyan-400 border border-cyan-500/30 font-mono font-bold shrink-0">
+                                  {channel.resolution}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-cyan-400/80 truncate block mt-0.5">
+                              {channel.group || (isRtl ? 'عام' : 'General')}
+                            </span>
+                            {channel.tagline && (
+                              <p className="text-[10px] text-slate-400 truncate mt-0.5">{channel.tagline}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleFavorite(channel.id);
+                            }}
+                            className="p-2 text-slate-400 hover:text-amber-400 transition cursor-pointer"
+                            title={t.favorites}
+                          >
+                            <Star className={`w-4 h-4 ${isFav ? 'text-amber-400 fill-current' : ''}`} />
+                          </button>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPlayFullscreen(channel);
+                            }}
+                            className="p-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold transition shadow-md shadow-cyan-500/30 cursor-pointer"
+                            title={t.fullScreen}
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current translate-x-0.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {visibleChannels.length < filteredChannels.length && (
+                  <div className="py-6 flex items-center justify-center">
+                    <button
+                      onClick={() => setVisibleCount(prev => prev + 50)}
+                      className="px-6 py-2.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-bold transition shadow-sm cursor-pointer"
+                    >
+                      {isRtl ? `عرض المزيد من القنوات (تم عرض ${visibleChannels.length} من ${filteredChannels.length})` : `Load More Channels (${visibleChannels.length} of ${filteredChannels.length})`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Quick Floating Mini-Player Bar at the Bottom */}
+          {selectedChannel && (
+            <div className="h-16 px-4 sm:px-8 bg-[#070b18] border-t border-white/10 flex items-center justify-between shrink-0 z-30 mb-16 md:mb-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-black border border-white/10 p-1 flex items-center justify-center shrink-0">
+                  {selectedChannel.logo ? (
+                    <img src={selectedChannel.logo} alt="" className="w-full h-full object-contain" />
+                  ) : (
+                    <Tv className="w-5 h-5 text-cyan-400" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black text-white truncate">{selectedChannel.name}</span>
+                    <span className="text-[10px] text-cyan-400 font-mono">({selectedChannel.group})</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 truncate">
+                    {selectedChannel.tagline || (isRtl ? 'البث المباشر عالي الدقة' : 'Live HD Streaming')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onPlayFullscreen(selectedChannel)}
+                  className="px-4 sm:px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-400 via-cyan-500 to-blue-600 hover:from-cyan-300 hover:to-blue-500 text-slate-950 font-black text-xs shadow-lg shadow-cyan-500/30 flex items-center gap-1.5 sm:gap-2 transition cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current translate-x-0.5" />
+                  <span className="text-[11px] sm:text-xs">{isRtl ? 'مشاهدة الآن' : 'Watch Live'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : viewMode === 'grid' ? (
         <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden bg-[#050811]">
           {/* Main 2D Scrollable Matrix Stage */}
           <div 
@@ -530,7 +720,7 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
 
               {/* CHANNELS AND EPG ROWS */}
               <div className="divide-y divide-white/5">
-                {filteredChannels.map((channel, cIdx) => {
+                {visibleChannels.map((channel, cIdx) => {
                   const isFav = favorites.includes(channel.id);
                   const isSelected = selectedChannel?.id === channel.id;
                   const schedules = channelSchedules.get(channel.id) || [];
@@ -691,11 +881,22 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
                   );
                 })}
               </div>
+
+              {visibleChannels.length < filteredChannels.length && (
+                <div className="p-4 flex items-center justify-center bg-black/40">
+                  <button
+                    onClick={() => setVisibleCount(prev => prev + 50)}
+                    className="px-6 py-2.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-bold transition shadow-sm cursor-pointer"
+                  >
+                    {isRtl ? `عرض المزيد من القنوات (تم عرض ${visibleChannels.length} من ${filteredChannels.length})` : `Load More Channels (${visibleChannels.length} of ${filteredChannels.length})`}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Quick Floating Mini-Player Bar at the Bottom */}
-          <div className="h-16 px-4 sm:px-8 bg-[#070b18] border-t border-white/10 flex items-center justify-between shrink-0 z-30">
+          <div className="h-16 px-4 sm:px-8 bg-[#070b18] border-t border-white/10 flex items-center justify-between shrink-0 z-30 mb-16 md:mb-0">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 rounded-xl bg-black border border-white/10 p-1 flex items-center justify-center shrink-0">
                 {selectedChannel.logo ? (
@@ -802,7 +1003,7 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-              {filteredChannels.map((channel, index) => {
+              {visibleChannels.map((channel, index) => {
                 const isSelected = selectedChannel?.id === channel.id;
                 const isFav = favorites.includes(channel.id);
                 const currentEpg = channel.epg?.[0];
@@ -889,6 +1090,17 @@ export const TivimateLiveTv: React.FC<TivimateLiveTvProps> = ({
                   </motion.div>
                 );
               })}
+
+              {visibleChannels.length < filteredChannels.length && (
+                <div className="p-3 flex items-center justify-center">
+                  <button
+                    onClick={() => setVisibleCount(prev => prev + 50)}
+                    className="w-full py-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition"
+                  >
+                    {isRtl ? `تحميل المزيد (${visibleChannels.length} من ${filteredChannels.length})` : `Load More (${visibleChannels.length} of ${filteredChannels.length})`}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

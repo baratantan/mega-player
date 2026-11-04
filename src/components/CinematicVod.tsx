@@ -31,19 +31,17 @@ const containerVariants = {
   show: {
     opacity: 1,
     transition: {
-      staggerChildren: 0.04,
-      delayChildren: 0.05,
+      duration: 0.25,
     },
   },
 };
 
 const itemVariants = {
-  hidden: { opacity: 0, y: 20, scale: 0.95 },
+  hidden: { opacity: 0, scale: 0.96 },
   show: { 
     opacity: 1, 
-    y: 0, 
     scale: 1,
-    transition: { duration: 0.4, ease: [0.25, 1, 0.5, 1] } 
+    transition: { duration: 0.25 } 
   },
 };
 
@@ -86,6 +84,16 @@ export const CinematicVod: React.FC<CinematicVodProps> = ({
       return true;
     });
   }, [items, selectedGroup, searchQuery]);
+
+  const [visibleCount, setVisibleCount] = useState<number>(48);
+
+  React.useEffect(() => {
+    setVisibleCount(48);
+  }, [selectedGroup, searchQuery]);
+
+  const visibleItems = useMemo(() => {
+    return filteredItems.slice(0, visibleCount);
+  }, [filteredItems, visibleCount]);
 
   return (
     <div className="flex-1 min-h-screen bg-[#050811] text-white pt-20 pb-20 px-4 sm:px-8 lg:px-12 space-y-8">
@@ -191,7 +199,7 @@ export const CinematicVod: React.FC<CinematicVodProps> = ({
           exit={{ opacity: 0, y: -10, transition: { duration: 0.2 } }}
           className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-6"
         >
-          {filteredItems.map(item => {
+          {visibleItems.map(item => {
             const isFav = favorites.includes(item.id);
 
             return (
@@ -336,6 +344,17 @@ export const CinematicVod: React.FC<CinematicVodProps> = ({
           })}
         </motion.div>
       </AnimatePresence>
+
+      {visibleItems.length < filteredItems.length && (
+        <div className="py-6 flex items-center justify-center">
+          <button
+            onClick={() => setVisibleCount(prev => prev + 48)}
+            className="px-8 py-3 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-bold transition shadow-lg cursor-pointer"
+          >
+            {lang === 'ar' ? `عرض المزيد (تم عرض ${visibleItems.length} من ${filteredItems.length})` : `Load More (${visibleItems.length} of ${filteredItems.length})`}
+          </button>
+        </div>
+      )}
 
       {filteredItems.length === 0 && (
         <motion.div 

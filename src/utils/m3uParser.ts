@@ -179,7 +179,6 @@ export function parseM3U(m3uText: string, playlistName = 'Custom Playlist'): Pla
         resolution: currentInfo.resolution || 'HD',
         country: currentInfo.country,
         language: currentInfo.language,
-        epg: category === 'live' ? generateMockEpg(currentInfo.name || '', currentInfo.group || '') : undefined,
       };
 
       items.push(item);
@@ -223,7 +222,6 @@ export function parseXtreamLiveStreams(
       tvgId: stream.epg_channel_id || undefined,
       category: 'live' as MediaCategory,
       resolution: stream.name?.includes('4K') ? '4K' : stream.name?.includes('FHD') ? 'FHD' : 'HD',
-      epg: generateMockEpg(stream.name || '', group),
     };
   });
 }

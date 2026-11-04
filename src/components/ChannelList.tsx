@@ -97,6 +97,16 @@ export const ChannelList: React.FC<ChannelListProps> = ({
     return Array.from(groups);
   }, [channels, favorites, recentIds, activeTab]);
 
+  const [visibleCount, setVisibleCount] = useState<number>(48);
+
+  React.useEffect(() => {
+    setVisibleCount(48);
+  }, [selectedGroup, selectedResolution, searchQuery, activeTab]);
+
+  const visibleChannels = useMemo(() => {
+    return filteredChannels.slice(0, visibleCount);
+  }, [filteredChannels, visibleCount]);
+
   return (
     <div className="flex-1 flex flex-col min-w-0 p-4 sm:p-6 overflow-y-auto">
       {/* Top Header & Group Filter Bar */}
@@ -197,7 +207,8 @@ export const ChannelList: React.FC<ChannelListProps> = ({
 
       {/* Channels Grid / List */}
       {filteredChannels.length > 0 ? (
-        <div
+        <>
+          <div
           className={
             layoutMode === 'grid'
               ? activeTab === 'movie' || activeTab === 'series'
@@ -206,7 +217,7 @@ export const ChannelList: React.FC<ChannelListProps> = ({
               : 'flex flex-col gap-2.5'
           }
         >
-          {filteredChannels.map((channel) => (
+          {visibleChannels.map((channel) => (
             <ChannelCard
               key={channel.id}
               channel={channel}
@@ -219,6 +230,18 @@ export const ChannelList: React.FC<ChannelListProps> = ({
             />
           ))}
         </div>
+
+        {visibleChannels.length < filteredChannels.length && (
+          <div className="py-6 flex items-center justify-center">
+            <button
+              onClick={() => setVisibleCount(prev => prev + 48)}
+              className="px-8 py-2.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-bold transition shadow-sm cursor-pointer"
+            >
+              {lang === 'ar' ? `تحميل المزيد (تم عرض ${visibleChannels.length} من ${filteredChannels.length})` : `Load More (${visibleChannels.length} of ${filteredChannels.length})`}
+            </button>
+          </div>
+        )}
+        </>
       ) : (
         /* Empty State */
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-900/30 rounded-3xl border border-slate-800/60 my-6">

@@ -10,6 +10,7 @@
 
 import { PlaylistItem, MediaCategory, EpgProgram } from '../types';
 import { generateMockEpg } from '../utils/m3uParser';
+import { errorLogService } from './errorLogService';
 
 export interface ParsedChannelItem {
   id: string;
@@ -259,11 +260,28 @@ export class M3uParserService {
         percent: 45,
         status: 'جاري التحميل المباشر من السيرفر...',
       });
-      const directRes = await fetch(cleanUrl);
-      if (!directRes.ok) {
-        throw new Error(`فشل تحميل الرابط: رمز الاستجابة ${directRes.status}`);
+      try {
+        const directRes = await fetch(cleanUrl);
+        if (!directRes.ok) {
+          const err = new Error(`فشل تحميل الرابط: رمز الاستجابة ${directRes.status}`);
+          errorLogService.logNetworkError({
+            url: cleanUrl,
+            status: directRes.status,
+            message: err.message,
+            details: `Failed to download M3U playlist file directly (HTTP ${directRes.status})`,
+          });
+          throw err;
+        }
+        textContent = await directRes.text();
+      } catch (err: any) {
+        errorLogService.logNetworkError({
+          url: cleanUrl,
+          status: 'M3U_DOWNLOAD_FAILED',
+          message: err?.message || 'فشل تحميل ملف M3U',
+          details: err?.stack,
+        });
+        throw err;
       }
-      textContent = await directRes.text();
     }
 
     if (!textContent || textContent.length < 10) {

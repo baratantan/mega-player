@@ -22,13 +22,19 @@ import { MultiScreenView } from './components/MultiScreenView';
 import { AddPlaylistModal } from './components/AddPlaylistModal';
 import { EpgModal } from './components/EpgModal';
 import { SettingsModal } from './components/SettingsModal';
+import { ErrorDiagnosticsModal } from './components/ErrorDiagnosticsModal';
 import { MovieDetailsModal } from './components/MovieDetailsModal';
 import { SearchModal } from './components/SearchModal';
+import { AndroidInstallModal } from './components/AndroidInstallModal';
+import { PremiumLicenseModal } from './components/PremiumLicenseModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useTvNavigation } from './hooks/useTvNavigation';
-import { Gamepad2 } from 'lucide-react';
+import { usePWAInstall } from './hooks/usePWAInstall';
+import { Gamepad2, Heart, HeartOff, PlayCircle, CheckCircle2, Info, Smartphone, Download, X as CloseIcon } from 'lucide-react';
 
 const STORAGE_KEY_SETTINGS = 'iptv_cinema_settings_v2';
 const STORAGE_KEY_LANG = 'iptv_cinema_lang_v2';
+const STORAGE_KEY_DISMISSED_INSTALL = 'iptv_cinema_dismissed_install_v1';
 
 export default function App() {
   // 1. IPTV Context Integration
@@ -78,12 +84,47 @@ export default function App() {
   
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [addModalInitialTab, setAddModalInitialTab] = useState<'url' | 'file' | 'xtream' | 'preset'>('url');
   const [isEpgModalOpen, setIsEpgModalOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'android' | 'subscription' | 'diagnostics' | 'parental' | 'general' | 'shortcuts' | 'logs'>('subscription');
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState<boolean>(false);
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
+  const [isAndroidInstallOpen, setIsAndroidInstallOpen] = useState<boolean>(false);
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(false);
+  const [dismissedMobileBanner, setDismissedMobileBanner] = useState<boolean>(() => {
+    return localStorage.getItem(STORAGE_KEY_DISMISSED_INSTALL) === 'true';
+  });
+
+  const { isInstallable, isInstalled, isStandalone, promptInstall } = usePWAInstall();
+
+  // Screen Wake-Lock: Keeps Android phone screen awake while watching video streams
+  useEffect(() => {
+    let wakeLockSentinel: any = null;
+    const requestWakeLock = async () => {
+      if ('wakeLock' in navigator && currentPlayingItem) {
+        try {
+          wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+        } catch (e) {
+          console.warn('Wake Lock request ignored:', e);
+        }
+      }
+    };
+    requestWakeLock();
+    return () => {
+      if (wakeLockSentinel) {
+        wakeLockSentinel.release().catch(() => {});
+      }
+    };
+  }, [currentPlayingItem]);
+
+  const handleOpenAddModal = (tab: 'url' | 'file' | 'xtream' | 'preset' = 'url') => {
+    setAddModalInitialTab(tab);
+    setIsAddModalOpen(true);
+  };
 
   // TV / D-Pad Remote Navigation System
-  const isAnyModalOpen = isAddModalOpen || isEpgModalOpen || isSettingsOpen || isSearchOpen || !!selectedMovieForDetails || !!currentPlayingItem;
+  const isAnyModalOpen = isAddModalOpen || isEpgModalOpen || isSettingsOpen || isErrorModalOpen || isSearchOpen || isAndroidInstallOpen || isLicenseModalOpen || !!selectedMovieForDetails || !!currentPlayingItem;
   const { isTvModeActive } = useTvNavigation({
     isModalOpen: isAnyModalOpen,
     activeTab,
@@ -152,42 +193,103 @@ export default function App() {
         playlists={profiles}
         activePlaylistId={activeProfile?.id || 'default_preset'}
         onSelectPlaylist={switchProfile}
-        onOpenAddModal={() => setIsAddModalOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenAddModal={handleOpenAddModal}
+        onOpenSettings={() => {
+          setSettingsInitialTab('subscription');
+          setIsSettingsOpen(true);
+        }}
+        onOpenErrorModal={() => setIsErrorModalOpen(true)}
         onOpenEpg={() => setIsEpgModalOpen(true)}
         onOpenMultiView={() => setActiveTab('multiview')}
         onOpenSearch={() => setIsSearchOpen(true)}
         onToggleLang={handleToggleLang}
         isScrolled={isScrolled}
+        onOpenAndroidInstall={() => setIsAndroidInstallOpen(true)}
+        onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
       />
 
+      {/* ANDROID APP INSTALL INVITATION BANNER (شريط تحويل الموقع لتطبيق أندرويد حقيقي) */}
+      {!isStandalone && !isInstalled && !dismissedMobileBanner && (
+        <div className="pt-16 sm:pt-20 px-3 sm:px-6 max-w-[1700px] mx-auto w-full">
+          <div className="p-3 sm:p-4 rounded-2xl bg-gradient-to-r from-cyan-950/80 via-slate-900/90 to-indigo-950/80 border border-cyan-500/30 backdrop-blur-xl shadow-lg flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-cyan-400 to-blue-600 p-[1px] shrink-0 shadow-md shadow-cyan-500/20">
+                <div className="w-full h-full bg-[#080d1a] rounded-[11px] flex items-center justify-center">
+                  <Smartphone className="w-5 h-5 text-cyan-400 animate-pulse" />
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs sm:text-sm font-black text-white">
+                    {lang === 'ar' ? 'حوّل الموقع إلى تطبيق أندرويد حقيقي' : 'Transform to Real Android App'}
+                  </span>
+                  <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold border border-emerald-500/30">
+                    4K APK
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 mt-0.5 line-clamp-1">
+                  {lang === 'ar' 
+                    ? 'مشاهدة سينمائية كاملة بدون شريط المتصفح Chrome مع سرعة فائقة وتحديث فوري'
+                    : 'Watch fullscreen without Chrome URL bar, with instant startup and wake lock'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setIsAndroidInstallOpen(true)}
+                className="px-3 sm:px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-600 hover:from-cyan-300 hover:to-blue-500 text-slate-950 font-black text-xs shadow-md shadow-cyan-500/25 transition active:scale-95 cursor-pointer flex items-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+                <span>{lang === 'ar' ? 'تثبيت التطبيق' : 'Install App'}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setDismissedMobileBanner(true);
+                  localStorage.setItem(STORAGE_KEY_DISMISSED_INSTALL, 'true');
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition"
+                title={lang === 'ar' ? 'إغلاق' : 'Dismiss'}
+              >
+                <CloseIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content View Switcher with Smooth Page Transitions */}
-      <main className="flex-1 flex flex-col min-w-0 min-h-0 bg-[#050811]">
-        <AnimatePresence mode="wait">
-          {/* 1. CINEMATIC HOME */}
-          {activeTab === 'home' && (
-            <motion.div
-              key="tab-home"
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              transition={{ duration: 0.35, ease: 'easeOut' }}
-              className="flex-1 flex flex-col"
-            >
-              <CinematicHome
-                channels={channels}
-                favorites={favorites}
-                recentChannels={recents}
-                watchProgressList={watchProgressList}
-                watchProgressMap={watchProgressMap}
-                onPlay={handlePlayItem}
-                onOpenDetails={setSelectedMovieForDetails}
-                onToggleFavorite={toggleFavorite}
-                onSelectTab={setActiveTab}
-                lang={lang}
-              />
-            </motion.div>
-          )}
+      <main className={`flex-1 flex flex-col min-w-0 min-h-0 bg-[#050811] pb-16 md:pb-0 ${
+        !isStandalone && !isInstalled && !dismissedMobileBanner ? 'pt-2' : ''
+      }`}>
+        <ErrorBoundary fallbackTitle={lang === 'ar' ? 'تعذر تحميل هذه الصفحة' : 'Failed to display this view'}>
+          <AnimatePresence mode="wait">
+            {/* 1. CINEMATIC HOME */}
+            {activeTab === 'home' && (
+              <motion.div
+                key="tab-home"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.35, ease: 'easeOut' }}
+                className="flex-1 flex flex-col"
+              >
+                <CinematicHome
+                  channels={channels}
+                  favorites={favorites}
+                  recentChannels={recents}
+                  watchProgressList={watchProgressList}
+                  watchProgressMap={watchProgressMap}
+                  onPlay={handlePlayItem}
+                  onOpenDetails={setSelectedMovieForDetails}
+                  onToggleFavorite={toggleFavorite}
+                  onSelectTab={setActiveTab}
+                  onOpenAddModal={handleOpenAddModal}
+                  lang={lang}
+                />
+              </motion.div>
+            )}
 
           {/* 2. TIVIMATE LIVE TV */}
           {activeTab === 'live' && (
@@ -275,7 +377,8 @@ export default function App() {
               />
             </motion.div>
           )}
-        </AnimatePresence>
+          </AnimatePresence>
+        </ErrorBoundary>
       </main>
 
       {/* FULL-THEATER CINEMATIC VIDEO PLAYER OVERLAY */}
@@ -287,6 +390,7 @@ export default function App() {
           onSelectChannel={handlePlayItem}
           settings={settings}
           onUpdateSettings={(newSet) => setSettings(prev => ({ ...prev, ...newSet }))}
+          onOpenDiagnostics={() => setIsErrorModalOpen(true)}
           lang={lang}
         />
       )}
@@ -309,6 +413,7 @@ export default function App() {
         <AddPlaylistModal
           onClose={() => setIsAddModalOpen(false)}
           lang={lang}
+          initialTab={addModalInitialTab}
         />
       )}
 
@@ -329,6 +434,21 @@ export default function App() {
           onClose={() => setIsSettingsOpen(false)}
           lang={lang}
           onToggleLang={handleToggleLang}
+          initialTab={settingsInitialTab}
+          onOpenAddPlaylistModal={handleOpenAddModal}
+        />
+      )}
+
+      {isErrorModalOpen && (
+        <ErrorDiagnosticsModal
+          onClose={() => setIsErrorModalOpen(false)}
+          lang={lang}
+          settings={settings}
+          onUpdateSettings={(newSet) => setSettings(prev => ({ ...prev, ...newSet }))}
+          onOpenSettingsTab={(tab) => {
+            setSettingsInitialTab(tab);
+            setIsSettingsOpen(true);
+          }}
         />
       )}
 
@@ -341,19 +461,55 @@ export default function App() {
         />
       )}
 
+      {/* ANDROID REAL APP INSTALL MODAL */}
+      <AndroidInstallModal
+        isOpen={isAndroidInstallOpen}
+        onClose={() => setIsAndroidInstallOpen(false)}
+        lang={lang}
+      />
+
+      {/* PREMIUM VIP PLAYER LICENSE & MONETIZATION MODAL */}
+      <PremiumLicenseModal
+        isOpen={isLicenseModalOpen}
+        onClose={() => setIsLicenseModalOpen(false)}
+        lang={lang}
+      />
+
       {/* GLOBAL TOAST NOTIFICATION */}
       <AnimatePresence>
         {toast && (
           <motion.div
+            key={toast.id}
             initial={{ opacity: 0, y: -20, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.9 }}
             transition={{ type: 'spring', damping: 25, stiffness: 400 }}
-            className="fixed top-20 left-1/2 -translate-x-1/2 z-50 pointer-events-none"
+            className="fixed top-20 left-1/2 -translate-x-1/2 z-50 pointer-events-none max-w-sm sm:max-w-md w-auto"
           >
-            <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-full bg-slate-900/90 backdrop-blur-xl border border-cyan-500/40 text-white text-xs shadow-2xl shadow-cyan-500/20 ring-1 ring-cyan-400/30">
-              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-              <span className="font-bold text-slate-100">{toast}</span>
+            <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-cyan-500/40 text-white text-xs shadow-2xl shadow-cyan-500/25 ring-1 ring-cyan-400/30">
+              {toast.type === 'fav_add' ? (
+                <div className="w-6 h-6 rounded-lg bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0 border border-pink-500/30">
+                  <Heart className="w-3.5 h-3.5 fill-pink-500" />
+                </div>
+              ) : toast.type === 'fav_remove' ? (
+                <div className="w-6 h-6 rounded-lg bg-slate-700/50 text-slate-300 flex items-center justify-center shrink-0 border border-slate-600/40">
+                  <HeartOff className="w-3.5 h-3.5" />
+                </div>
+              ) : toast.type === 'resume' ? (
+                <div className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0 border border-cyan-500/30">
+                  <PlayCircle className="w-3.5 h-3.5" />
+                </div>
+              ) : (
+                <div className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0 border border-cyan-500/30">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
+                </div>
+              )}
+              <div className="flex flex-col text-start">
+                <span className="font-bold text-slate-100 text-xs sm:text-sm">{toast.title}</span>
+                {toast.subtitle && (
+                  <span className="text-[11px] text-cyan-300 font-medium">{toast.subtitle}</span>
+                )}
+              </div>
             </div>
           </motion.div>
         )}

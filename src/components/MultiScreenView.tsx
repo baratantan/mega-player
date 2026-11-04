@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { PlaylistItem, MultiSlot } from '../types';
 import { Language, translations } from '../utils/translations';
+import { errorLogService } from '../services/errorLogService';
 
 interface MultiScreenViewProps {
   allChannels: PlaylistItem[];
@@ -250,12 +251,28 @@ const MultiSlotPlayer: React.FC<MultiSlotPlayerProps> = ({
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
+          errorLogService.logPlayerError({
+            channelName: slot.channel?.name,
+            channelUrl: streamUrl,
+            errorCode: data.details || 'HLS_FATAL_ERROR',
+            message: `HLS Multi-View Playback Error: ${data.type}`,
+            details: `Fatal: ${data.fatal} | Attempting proxy fallback`,
+          });
           // try with proxy
           hls.loadSource(`/api/proxy?url=${encodeURIComponent(streamUrl)}`);
         }
       });
     } else {
       video.src = streamUrl;
+      video.onerror = () => {
+        errorLogService.logPlayerError({
+          channelName: slot.channel?.name,
+          channelUrl: streamUrl,
+          errorCode: video.error?.code ? `MEDIA_ERR_${video.error.code}` : 'HTML5_VIDEO_ERROR',
+          message: 'Native video element error in multi-view slot',
+          details: `Source: ${streamUrl}`,
+        });
+      };
       video.play().catch(() => {});
       setIsSlotLoading(false);
     }

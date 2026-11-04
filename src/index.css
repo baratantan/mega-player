@@ -63,3 +63,23 @@ button.tv-focusable.tv-focused {
   background: rgba(6, 182, 212, 0.8);
 }
 
+/* Video.js Mobile Viewport Reset - Guarantee Player Fits Screen */
+.video-js,
+.video-js.vjs-fill,
+.video-js.vjs-fluid {
+  width: 100% !important;
+  height: 100% !important;
+  padding-top: 0 !important;
+  max-width: 100vw !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+}
+
+.video-js video {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100vw !important;
+  max-height: 100dvh !important;
+}
+
+

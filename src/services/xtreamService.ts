@@ -10,6 +10,7 @@
 
 import { PlaylistItem, MediaCategory } from '../types';
 import { generateMockEpg } from '../utils/m3uParser';
+import { errorLogService } from './errorLogService';
 
 export interface XtreamCredentials {
   serverUrl: string;
@@ -190,19 +191,65 @@ export interface XtreamCompleteData {
   };
 }
 
+export function parseXtreamUrl(input: string): { serverUrl: string; username: string; password: string } | null {
+  if (!input || typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  
+  try {
+    const urlObj = new URL(trimmed.startsWith('http') ? trimmed : `http://${trimmed}`);
+    const u = urlObj.searchParams.get('username') || urlObj.searchParams.get('user');
+    const p = urlObj.searchParams.get('password') || urlObj.searchParams.get('pass');
+    if (u && p) {
+      const serverUrl = `${urlObj.protocol}//${urlObj.host}`;
+      return { serverUrl, username: decodeURIComponent(u), password: decodeURIComponent(p) };
+    }
+    
+    // Path pattern: /live/:user/:pass/:id or /movie/:user/:pass/:id or /series/:user/:pass/:id
+    const pathParts = urlObj.pathname.split('/').filter(Boolean);
+    if (pathParts.length >= 3 && ['live', 'movie', 'series'].includes(pathParts[0])) {
+      return {
+        serverUrl: `${urlObj.protocol}//${urlObj.host}`,
+        username: decodeURIComponent(pathParts[1]),
+        password: decodeURIComponent(pathParts[2]),
+      };
+    }
+  } catch {
+    // Regex fallback
+  }
+
+  const userMatch = trimmed.match(/[?&](?:username|user)=([^&#\s]+)/i);
+  const passMatch = trimmed.match(/[?&](?:password|pass)=([^&#\s]+)/i);
+  if (userMatch && passMatch) {
+    const hostMatch = trimmed.match(/^(https?:\/\/[^/?#]+)/i);
+    const serverUrl = hostMatch ? hostMatch[1] : trimmed.split(/[?#/]/)[0];
+    return {
+      serverUrl: serverUrl.startsWith('http') ? serverUrl : `http://${serverUrl}`,
+      username: decodeURIComponent(userMatch[1]),
+      password: decodeURIComponent(passMatch[1]),
+    };
+  }
+
+  return null;
+}
+
 export class XtreamService {
   /**
-   * تنسيق وتنظيف رابط الخادم
+   * تنسيق وتنظيف رابط الخادم وتجريد المسارات الزائدة مثل /player_api.php
    */
   public cleanServerUrl(serverUrl: string): string {
     let clean = serverUrl.trim();
     if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
       clean = 'http://' + clean;
     }
-    if (clean.endsWith('/')) {
-      clean = clean.slice(0, -1);
+    try {
+      const parsed = new URL(clean);
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      if (clean.endsWith('/')) {
+        clean = clean.slice(0, -1);
+      }
+      return clean;
     }
-    return clean;
   }
 
   /**
@@ -238,11 +285,30 @@ export class XtreamService {
    * دالة مساعدة عامة لتنفيذ طلبات الـ API وإرجاع JSON
    */
   private async executeQuery<T>(url: string): Promise<T> {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`خطأ في استجابة السيرفر: ${response.status} (${response.statusText})`);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        const errorMsg = `خطأ في استجابة السيرفر: ${response.status} (${response.statusText})`;
+        errorLogService.logNetworkError({
+          url,
+          status: response.status,
+          message: errorMsg,
+          details: `Xtream API query returned status ${response.status}`,
+        });
+        throw new Error(errorMsg);
+      }
+      return response.json();
+    } catch (err: any) {
+      if (!err.message?.includes('خطأ في استجابة السيرفر:')) {
+        errorLogService.logNetworkError({
+          url,
+          status: 'FETCH_ERROR',
+          message: err?.message || 'فشل الاتصال بخادم Xtream',
+          details: err?.stack,
+        });
+      }
+      throw err;
     }
-    return response.json();
   }
 
   // =========================================================================
@@ -493,7 +559,6 @@ export class XtreamService {
         tvgId: stream.epg_channel_id || undefined,
         category: 'live' as MediaCategory,
         resolution: stream.name?.includes('4K') ? '4K' : stream.name?.includes('FHD') ? 'FHD' : 'HD',
-        epg: generateMockEpg(stream.name || '', groupName),
       });
     });
 

@@ -1,16 +1,35 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ar" dir="rtl" class="dark">
-<head>
+  <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>IPTV Cinema Pro | الجودة وفريق بيت التلفزيون السينمائي</title>
-    <meta name="description" content="IPTV منصة ل القنوات التلفزيونية الحية وأحدث الأفلام والمسلسلات بجودة 4K" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>IPTV Cinema Pro | تطبيق الترفيه والتلفزيون السينمائي</title>
+    <meta name="description" content="تطبيق IPTV السينمائي الفاخر لنظام أندرويد لبث القنوات التلفزيونية الحية وأحدث الأفلام والمسلسلات بجودة 4K" />
+    
+    <!-- Android & PWA Meta Tags -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Cinema Pro" />
+    <meta name="application-name" content="Cinema Pro" />
+    <meta name="theme-color" content="#050811" />
+    <meta name="msapplication-navbutton-color" content="#050811" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- Favicon, Manifest, and App Icons -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/pwa-512x512.png" />
+
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@300;400;500;700" rel="stylesheet">
-</head>
-<body class="bg-[#0b0f11] text-slate-100 antialiased font-['Tajawal','Cairo',sans-serif] selection:bg-cyan-500 selection:text-black">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@300;400;500;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-[#050811] text-slate-100 antialiased font-['Tajawal','Cairo',sans-serif] selection:bg-cyan-500 selection:text-black overflow-x-hidden select-none">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-</body>
+  </body>
 </html>

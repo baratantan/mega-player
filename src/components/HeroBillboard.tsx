@@ -33,45 +33,67 @@ export const HeroBillboard: React.FC<HeroBillboardProps> = ({
   const t = translations[lang];
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  const activeItem = featuredItems[currentIndex] || featuredItems[0];
+  // Cap billboard items strictly to top 8 featured items to avoid thousands of DOM elements
+  const displayItems = React.useMemo(() => {
+    return (featuredItems || []).slice(0, 8);
+  }, [featuredItems]);
+
+  const activeItem = displayItems[currentIndex] || displayItems[0];
 
   // Auto rotate billboard every 8 seconds
   useEffect(() => {
-    if (featuredItems.length <= 1) return;
+    if (displayItems.length <= 1) return;
     const timer = setInterval(() => {
-      handleNext();
+      setCurrentIndex(prev => (prev + 1) % displayItems.length);
     }, 8000);
     return () => clearInterval(timer);
-  }, [featuredItems.length, currentIndex]);
+  }, [displayItems.length, currentIndex]);
 
   const handleNext = () => {
-    setCurrentIndex(prev => (prev + 1) % featuredItems.length);
+    if (displayItems.length <= 1) return;
+    setCurrentIndex(prev => (prev + 1) % displayItems.length);
   };
 
   const handlePrev = () => {
-    setCurrentIndex(prev => (prev - 1 + featuredItems.length) % featuredItems.length);
+    if (displayItems.length <= 1) return;
+    setCurrentIndex(prev => (prev - 1 + displayItems.length) % displayItems.length);
   };
 
   if (!activeItem) return null;
 
   const isFav = favorites.includes(activeItem.id);
+  const artworkUrl = activeItem.backdrop || activeItem.logo;
 
   return (
     <div className="relative w-full h-[70vh] sm:h-[80vh] lg:h-[88vh] min-h-[520px] max-h-[920px] overflow-hidden">
       {/* High-Resolution Dynamic Backdrop Artwork with Crossfade Animation */}
-      <div className="absolute inset-0 select-none overflow-hidden">
+      <div className="absolute inset-0 select-none overflow-hidden bg-gradient-to-br from-slate-950 via-cyan-950/40 to-[#050811]">
         <AnimatePresence mode="wait">
-          <motion.img
-            key={activeItem.id}
-            src={activeItem.backdrop || activeItem.logo}
-            alt={activeItem.name}
-            referrerPolicy="no-referrer"
-            initial={{ opacity: 0, scale: 1.08, filter: 'blur(8px)' }}
-            animate={{ opacity: 0.85, scale: 1, filter: 'blur(0px)' }}
-            exit={{ opacity: 0, scale: 0.96, filter: 'blur(4px)' }}
-            transition={{ duration: 0.9, ease: [0.25, 1, 0.5, 1] }}
-            className="w-full h-full object-cover object-center transform"
-          />
+          {artworkUrl ? (
+            <motion.img
+              key={activeItem.id}
+              src={artworkUrl}
+              alt={activeItem.name}
+              referrerPolicy="no-referrer"
+              initial={{ opacity: 0, scale: 1.08, filter: 'blur(8px)' }}
+              animate={{ opacity: 0.85, scale: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, scale: 0.96, filter: 'blur(4px)' }}
+              transition={{ duration: 0.9, ease: [0.25, 1, 0.5, 1] }}
+              className="w-full h-full object-cover object-center transform"
+              onError={(e) => {
+                // If image fails, hide it gracefully
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
+          ) : (
+            <motion.div
+              key={`fallback-${activeItem.id}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.7 }}
+              exit={{ opacity: 0 }}
+              className="w-full h-full bg-gradient-to-tr from-cyan-950/60 via-slate-900 to-indigo-950/50 flex items-center justify-center"
+            />
+          )}
         </AnimatePresence>
 
         {/* Dynamic Dark Gradient Cinematic Vignette Overlays */}
@@ -226,7 +248,7 @@ export const HeroBillboard: React.FC<HeroBillboardProps> = ({
             <ChevronLeft className="w-4 h-4 rtl:rotate-180" />
           </motion.button>
           <div className="flex items-center gap-1.5">
-            {featuredItems.map((_, idx) => (
+            {displayItems.map((_, idx) => (
               <button
                 key={idx}
                 tabIndex={0}

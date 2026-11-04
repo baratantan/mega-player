@@ -1,8 +1,10 @@
 import { PlaylistItem, PlaylistProfile, MediaCategory, EpgProgram } from '../types';
 import { generateMockEpg, parseM3U } from '../utils/m3uParser';
 import { DEFAULT_CHANNELS } from '../data/defaultChannels';
-import { xtreamService, XtreamAuthResponse, XtreamFetchProgress } from './xtreamService';
+import { xtreamService, XtreamAuthResponse, XtreamFetchProgress, parseXtreamUrl } from './xtreamService';
+import { dbService } from './dbService';
 export type { XtreamAuthResponse };
+export { parseXtreamUrl };
 
 export interface IptvLoadProgress {
   percent: number;
@@ -26,12 +28,21 @@ export interface PresetPlaylist {
 export const PRESET_PLAYLISTS: PresetPlaylist[] = [
   {
     id: 'preset_curated_cinema',
-    name: 'Cinema Pro 4K & Global Live (مدمج سينمائي)',
+    name: 'Cinema Pro 4K & Global Live (مدمج سينمائي مجاني)',
     description: 'باقة سينمائية حصرية فائقة الدقة 4K مع أفلام، مسلسلات، وقنوات إخبارية ووثائقية مباشرة جاهزة للتشغيل.',
     url: 'internal://default',
     badge: '4K Ultra HD',
     channelCountEstimate: `${DEFAULT_CHANNELS.length}+ قنوات وأفلام`,
     icon: 'Sparkles',
+  },
+  {
+    id: 'preset_quran_islamic',
+    name: 'القنوات العربية والإسلامية المباشرة (مجاني)',
+    description: 'باقة القنوات الفضائية العربية وإذاعات القرآن الكريم المباشرة وتلاوات كبار القراء على مدار الساعة.',
+    url: 'https://iptv-org.github.io/iptv/languages/ara.m3u',
+    badge: 'Arabic & Islamic Live',
+    channelCountEstimate: '180+ قناة وإذاعة عربية',
+    icon: 'Radio',
   },
   {
     id: 'preset_iptv_org_worldwide',
@@ -268,7 +279,7 @@ class IptvService {
   }
 
   /**
-   * Local storage profiles persistence
+   * Local storage profiles persistence with IndexedDB backing
    */
   getStoredProfiles(): PlaylistProfile[] {
     try {
@@ -276,7 +287,15 @@ class IptvService {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map(p => {
+            if (p.id === 'default_preset') {
+              return { ...p, channels: DEFAULT_CHANNELS };
+            }
+            return {
+              ...p,
+              channels: p.channels || [],
+            };
+          });
         }
       }
     } catch (err) {
@@ -296,12 +315,37 @@ class IptvService {
     return [defaultProfile];
   }
 
+  private savedProfilesToDb = new Set<string>();
+
   saveProfiles(profiles: PlaylistProfile[]): void {
     try {
-      localStorage.setItem(STORAGE_KEY_PROFILES, JSON.stringify(profiles));
+      // 1. Strip channels array from localStorage representation to avoid quota errors and main thread freezing
+      const lightweightProfiles = profiles.map(p => {
+        const { channels, ...meta } = p;
+        if (channels && channels.length > 0 && p.id !== 'default_preset' && !this.savedProfilesToDb.has(p.id)) {
+          this.savedProfilesToDb.add(p.id);
+          dbService.saveChannels(p.id, channels).catch(e => {
+            console.warn('db save error', e);
+            this.savedProfilesToDb.delete(p.id);
+          });
+        }
+        return {
+          ...meta,
+          channelCount: channels ? channels.length : (p.channelCount || 0),
+        };
+      });
+
+      localStorage.setItem(STORAGE_KEY_PROFILES, JSON.stringify(lightweightProfiles));
     } catch (err) {
       console.warn('Failed to save profiles to localStorage:', err);
     }
+  }
+
+  /**
+   * Clears saved flag so updated profile channels can be re-persisted
+   */
+  invalidateProfileCache(profileId: string): void {
+    this.savedProfilesToDb.delete(profileId);
   }
 
   getActiveProfileId(): string | null {

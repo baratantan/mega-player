@@ -32,11 +32,16 @@ import {
   Gamepad2,
   Star,
   Sparkles,
-  History
+  History,
+  Wrench,
+  WifiOff,
+  ShieldAlert,
+  MoreVertical
 } from 'lucide-react';
 import { PlaylistItem, PlayerSettings } from '../types';
 import { Language, translations } from '../utils/translations';
 import { useIptv } from '../context/IptvContext';
+import { errorLogService } from '../services/errorLogService';
 
 
 interface VideoPlayerProps {
@@ -46,6 +51,7 @@ interface VideoPlayerProps {
   onSelectChannel: (channel: PlaylistItem) => void;
   settings: PlayerSettings;
   onUpdateSettings: (newSettings: Partial<PlayerSettings>) => void;
+  onOpenDiagnostics?: () => void;
   lang: Language;
 }
 
@@ -65,6 +71,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onSelectChannel,
   settings,
   onUpdateSettings,
+  onOpenDiagnostics,
   lang,
 }) => {
   const t = translations[lang];
@@ -88,7 +95,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [hasError, setHasError] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
-  const [useProxyFallback, setUseProxyFallback] = useState<boolean>(false);
+  const [useProxyFallback, setUseProxyFallback] = useState<boolean>(() => {
+    return settings.proxyStreams || (typeof window !== 'undefined' && window.location.protocol === 'https:' && channel.url.startsWith('http://'));
+  });
 
   // Resume notification banner state
   const [resumedFromTime, setResumedFromTime] = useState<number | null>(null);
@@ -103,6 +112,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showEpgDrawer, setShowEpgDrawer] = useState<boolean>(false);
   const [showStatsModal, setShowStatsModal] = useState<boolean>(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState<boolean>(false);
+  const [showMobileMoreMenu, setShowMobileMoreMenu] = useState<boolean>(false);
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
   const [sleepRemainingSec, setSleepRemainingSec] = useState<number | null>(null);
   const [screenshotToast, setScreenshotToast] = useState<boolean>(false);
@@ -125,6 +135,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Stream health check & error resilience
+  const [streamHealth, setStreamHealth] = useState<{
+    status: number;
+    text: string;
+    is404: boolean;
+    is403: boolean;
+    checked: boolean;
+    loading: boolean;
+  }>({
+    status: 0,
+    text: '',
+    is404: false,
+    is403: false,
+    checked: false,
+    loading: false,
+  });
+
+  const [autoSkipCountdown, setAutoSkipCountdown] = useState<number | null>(null);
+  const autoSkipTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   // Trigger OSD Notification (Visual Feedback on TV Screen)
   const showOsdNotice = useCallback((newOsd: OsdMessage) => {
     if (osdTimeoutRef.current) clearTimeout(osdTimeoutRef.current);
@@ -134,6 +164,96 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setOsd(null);
     }, 1800);
   }, []);
+
+  // Channel Zapping (Next / Previous Channel)
+  const zapChannel = useCallback((dir: 'next' | 'prev') => {
+    const currentIndex = allChannels.findIndex(c => c.id === channel.id);
+    if (currentIndex === -1) return;
+
+    let targetIndex = dir === 'next' ? currentIndex + 1 : currentIndex - 1;
+    if (targetIndex >= allChannels.length) targetIndex = 0;
+    if (targetIndex < 0) targetIndex = allChannels.length - 1;
+
+    const nextChan = allChannels[targetIndex];
+    onSelectChannel(nextChan);
+
+    showOsdNotice({
+      id: 'zap',
+      type: 'channel',
+      title: nextChan.name,
+      subtitle: `${nextChan.group} • ${dir === 'next' ? 'التالي' : 'السابق'}`,
+      icon: <Tv className="w-8 h-8 text-cyan-400" />,
+    });
+  }, [allChannels, channel.id, onSelectChannel, showOsdNotice]);
+
+  const cancelAutoSkip = useCallback(() => {
+    if (autoSkipTimerRef.current) {
+      clearInterval(autoSkipTimerRef.current);
+      autoSkipTimerRef.current = null;
+    }
+    setAutoSkipCountdown(null);
+  }, []);
+
+  const checkStreamHealth = useCallback(async (url: string) => {
+    setStreamHealth(prev => ({ ...prev, loading: true }));
+    try {
+      const res = await fetch(`/api/stream-check?url=${encodeURIComponent(url)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setStreamHealth({
+          status: data.status,
+          text: data.statusText || (data.status === 404 ? '404 Not Found' : 'OK'),
+          is404: data.status === 404 || data.is404,
+          is403: data.status === 403 || data.is403,
+          checked: true,
+          loading: false,
+        });
+      }
+    } catch {
+      setStreamHealth({
+        status: 0,
+        text: 'Network Error',
+        is404: false,
+        is403: false,
+        checked: true,
+        loading: false,
+      });
+    }
+  }, []);
+
+  const startAutoSkip = useCallback(() => {
+    if (allChannels.length <= 1) return;
+    if (autoSkipTimerRef.current) clearInterval(autoSkipTimerRef.current);
+
+    setAutoSkipCountdown(6);
+    autoSkipTimerRef.current = setInterval(() => {
+      setAutoSkipCountdown(prev => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          if (autoSkipTimerRef.current) {
+            clearInterval(autoSkipTimerRef.current);
+            autoSkipTimerRef.current = null;
+          }
+          zapChannel('next');
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, [allChannels.length, zapChannel]);
+
+  useEffect(() => {
+    cancelAutoSkip();
+    setUseProxyFallback(settings.proxyStreams || (typeof window !== 'undefined' && window.location.protocol === 'https:' && channel.url.startsWith('http://')));
+    setStreamHealth({
+      status: 0,
+      text: '',
+      is404: false,
+      is403: false,
+      checked: false,
+      loading: false,
+    });
+  }, [channel.id, channel.url, settings.proxyStreams, cancelAutoSkip]);
 
   // Auto-hide controls
   const handleMouseMove = useCallback(() => {
@@ -204,8 +324,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     // Create video element for Video.js
     const videoElement = document.createElement('video-js');
-    videoElement.classList.add('vjs-big-play-centered', 'vjs-fluid', 'vjs-theme-cinema');
+    videoElement.classList.add('vjs-big-play-centered', 'vjs-fill', 'vjs-theme-cinema');
     videoElement.setAttribute('playsinline', 'true');
+    videoElement.setAttribute('webkit-playsinline', 'true');
     videoElement.setAttribute('crossorigin', 'anonymous');
     videoNodeRef.current.innerHTML = '';
     videoNodeRef.current.appendChild(videoElement);
@@ -216,7 +337,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       autoplay: true,
       controls: false, // We use custom cinema HUD
       responsive: true,
-      fluid: true,
+      fill: true,
+      fluid: false,
       preload: 'auto',
       sources: [sourceObj],
       html5: {
@@ -339,13 +461,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const err = player.error();
         console.warn('Video.js Player Error:', err);
 
+        const errCode = err?.code ? `MEDIA_ERR_${err.code}` : 'PLAYER_STREAM_ERROR';
+        const errMsg = err?.message || (lang === 'ar' ? 'تعذر تحميل أو تشغيل دفق الفيديو' : 'Failed to load video stream');
+
+        errorLogService.logPlayerError({
+          channelName: channel.name,
+          channelUrl: channel.url,
+          errorCode: errCode,
+          message: errMsg,
+          details: `Source: ${channel.url} | Proxy: ${useProxyFallback ? 'Active' : 'Direct'} | Group: ${channel.group || 'N/A'}`,
+        });
+
+        checkStreamHealth(channel.url);
+
         if (!useProxyFallback) {
           console.warn('Attempting CORS proxy fallback...');
           setUseProxyFallback(true);
         } else {
           setHasError(true);
-          setErrorMessage(lang === 'ar' ? 'تعذر تشغيل هذا البث، قد يكون السيرفر غير متوفر.' : 'Failed to load stream.');
+          setErrorMessage(lang === 'ar' ? 'تعذر تشغيل هذا البث، قد يكون السيرفر غير متوفر أو متوقفاً من المصدر (خطأ 404).' : 'Failed to load stream (Server offline or 404).');
           setIsLoading(false);
+          startAutoSkip();
         }
       });
     });
@@ -532,6 +668,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [lang, showOsdNotice]);
 
+  // Handle Mobile Screen Orientation (Portrait / Landscape flip)
+  const toggleOrientation = useCallback(async () => {
+    try {
+      if (typeof screen !== 'undefined' && screen.orientation && 'lock' in screen.orientation) {
+        if (screen.orientation.type.includes('portrait')) {
+          await (screen.orientation as any).lock('landscape');
+        } else {
+          await (screen.orientation as any).lock('portrait');
+        }
+      } else {
+        toggleFullscreen();
+      }
+    } catch {
+      toggleFullscreen();
+    }
+  }, [toggleFullscreen]);
+
   // Handle Picture-in-Picture
   const togglePiP = useCallback(async () => {
     const p = playerRef.current;
@@ -549,27 +702,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       console.error('PiP error:', err);
     }
   }, []);
-
-  // Channel Zapping (Next / Previous Channel)
-  const zapChannel = useCallback((dir: 'next' | 'prev') => {
-    const currentIndex = allChannels.findIndex(c => c.id === channel.id);
-    if (currentIndex === -1) return;
-
-    let targetIndex = dir === 'next' ? currentIndex + 1 : currentIndex - 1;
-    if (targetIndex >= allChannels.length) targetIndex = 0;
-    if (targetIndex < 0) targetIndex = allChannels.length - 1;
-
-    const nextChan = allChannels[targetIndex];
-    onSelectChannel(nextChan);
-
-    showOsdNotice({
-      id: 'zap',
-      type: 'channel',
-      title: nextChan.name,
-      subtitle: `${nextChan.group} • ${dir === 'next' ? 'التالي' : 'السابق'}`,
-      icon: <Tv className="w-8 h-8 text-cyan-400" />,
-    });
-  }, [allChannels, channel.id, onSelectChannel, showOsdNotice]);
 
   // Aspect Ratio Switcher
   const cycleAspectRatio = useCallback(() => {
@@ -818,14 +950,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const getAspectRatioClass = () => {
     switch (settings.aspectRatio) {
       case '4:3':
-        return 'aspect-[4/3] max-w-[80vw] max-h-[100vh] mx-auto';
+        return 'aspect-[4/3] max-w-full max-h-full mx-auto [&_video]:object-contain';
       case 'fill':
-        return 'w-full h-full object-fill [&_video]:object-fill';
+        return 'w-full h-full max-w-full max-h-full [&_video]:object-fill';
       case 'original':
-        return 'w-auto h-auto max-w-full max-h-full mx-auto';
+        return 'w-auto h-auto max-w-full max-h-full mx-auto [&_video]:object-none';
       case '16:9':
       default:
-        return 'w-full h-full object-contain [&_video]:object-contain';
+        return 'w-full h-full max-w-full max-h-full [&_video]:object-contain';
     }
   };
 
@@ -833,13 +965,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      className="fixed inset-0 z-50 bg-black flex items-center justify-center select-none overflow-hidden"
+      className="fixed inset-0 z-50 bg-black flex items-center justify-center select-none overflow-hidden max-w-[100vw] max-h-[100dvh] w-full h-[100dvh] touch-manipulation"
     >
       {/* Video.js Native Video Node Wrapper */}
       <div 
         ref={videoNodeRef}
         onClick={togglePlay}
-        className={`w-full h-full flex items-center justify-center ${getAspectRatioClass()} [&_.video-js]:w-full [&_.video-js]:h-full [&_.video-js]:bg-black`}
+        className={`w-full h-full max-w-full max-h-full flex items-center justify-center ${getAspectRatioClass()} [&_.video-js]:!w-full [&_.video-js]:!h-full [&_.video-js]:!p-0 [&_.video-js]:bg-black [&_video]:max-w-full [&_video]:max-h-full`}
       />
 
       {/* CENTER OSD (On-Screen Display) FOR REMOTE ACTIONS */}
@@ -888,35 +1020,139 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Error Overlay with Proxy Fallback */}
+      {/* Error Overlay with Smart Recovery & Auto-Skip */}
       {hasError && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/95 p-6 text-center z-40">
-          <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mb-4 shadow-xl shadow-red-950">
-            <AlertCircle className="w-8 h-8" />
-          </div>
-          <h3 className="text-lg font-bold text-white mb-2">{errorMessage}</h3>
-          <p className="text-xs text-slate-400 max-w-md mb-6 leading-relaxed">
-            {useProxyFallback
-              ? (lang === 'ar' ? 'تمت المحاولة عبر خادم البروكسي الداخلي ولكن السيرفر غير مستجيب حالياً.' : 'Stream unavailable via internal proxy fallback.')
-              : (lang === 'ar' ? 'قد يتطلب هذا البث خادم وسيط لتجاوز قيود CORS.' : 'CORS proxy fallback might be required.')}
-          </p>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                setHasError(false);
-                setUseProxyFallback(!useProxyFallback);
-              }}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-black text-xs shadow-lg shadow-cyan-500/30 transition cursor-pointer"
-            >
-              <RefreshCw className="w-4 h-4" />
-              {t.retry}
-            </button>
-            <button
-              onClick={onClose}
-              className="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 text-xs font-bold transition cursor-pointer"
-            >
-              {t.close}
-            </button>
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/95 p-4 sm:p-8 text-center z-40 overflow-y-auto backdrop-blur-md">
+          <div className="max-w-md w-full bg-slate-900/95 border border-red-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl shadow-red-950/60 space-y-5">
+            {/* Top Status Icon & Badge */}
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 shadow-xl shadow-red-950">
+                {streamHealth.is404 ? <WifiOff className="w-8 h-8 text-amber-400" /> : <AlertCircle className="w-8 h-8" />}
+              </div>
+              <span className={`px-3 py-1 rounded-full text-xs font-bold tracking-wide uppercase ${
+                streamHealth.is404 || errorMessage.includes('404')
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  : 'bg-red-500/20 text-red-300 border border-red-500/40'
+              }`}>
+                {streamHealth.is404 || errorMessage.includes('404')
+                  ? (lang === 'ar' ? 'خطأ 404: البث غير متاح من المصدر' : 'HTTP 404: Stream Offline')
+                  : (lang === 'ar' ? 'تعذر تشغيل دفق القناة' : 'Playback Error')}
+              </span>
+            </div>
+
+            {/* Channel Info & Explanation */}
+            <div>
+              <h3 className="text-base sm:text-lg font-black text-white flex items-center justify-center gap-2">
+                <span>{channel.name}</span>
+              </h3>
+              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                {streamHealth.is404 || errorMessage.includes('404')
+                  ? (lang === 'ar'
+                      ? 'قام سيرفر البث الأصلي للقناة (مثل Akamai CDN) بإيقاف هذا الرابط أو لم يعد متوفراً حالياً. تطبيق Cinema Pro يعمل بشكل ممتاز.'
+                      : 'The upstream broadcast CDN (e.g., Akamai) returned 404 Not Found. This stream is currently offline from the broadcaster.')
+                  : (useProxyFallback
+                      ? (lang === 'ar' ? 'تمت المحاولة عبر خادم البروكسي الداخلي ولكن السيرفر لا يستجيب حالياً.' : 'Stream unavailable via internal proxy fallback.')
+                      : (lang === 'ar' ? 'قد يتطلب هذا البث وسيط لتجاوز قيود CORS أو تم حظر الاتصال.' : 'CORS proxy fallback might be required.'))}
+              </p>
+              {/* Short URL snippet */}
+              <div className="mt-3 p-2 rounded-xl bg-black/60 border border-white/5 font-mono text-[10px] text-slate-400 truncate">
+                {channel.url}
+              </div>
+            </div>
+
+            {/* Auto-Skip Countdown Banner (if active) */}
+            {autoSkipCountdown !== null && (
+              <div className="p-3.5 rounded-2xl bg-cyan-950/40 border border-cyan-500/40 flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 text-cyan-200 font-bold">
+                  <RotateCw className="w-4 h-4 text-cyan-400 animate-spin" />
+                  <span>
+                    {lang === 'ar'
+                      ? `الانتقال التلقائي للقناة التالية خلال ${autoSkipCountdown} ثوانٍ...`
+                      : `Auto-skipping to next channel in ${autoSkipCountdown}s...`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      cancelAutoSkip();
+                      zapChannel('next');
+                    }}
+                    className="px-3 py-1 rounded-xl bg-cyan-500 text-slate-950 font-black text-[11px] hover:bg-cyan-400 transition cursor-pointer"
+                  >
+                    {lang === 'ar' ? 'تخطي الآن' : 'Skip Now'}
+                  </button>
+                  <button
+                    onClick={cancelAutoSkip}
+                    className="px-2.5 py-1 rounded-xl bg-white/10 text-slate-300 font-bold text-[11px] hover:bg-white/20 transition cursor-pointer"
+                  >
+                    {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="space-y-2.5 pt-1">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    cancelAutoSkip();
+                    zapChannel('next');
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-black text-xs shadow-lg shadow-cyan-500/25 transition cursor-pointer active:scale-95"
+                >
+                  <SkipForward className="w-4 h-4" />
+                  <span>{lang === 'ar' ? 'القناة التالية' : 'Next Channel'}</span>
+                </button>
+                <button
+                  onClick={() => {
+                    cancelAutoSkip();
+                    zapChannel('prev');
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-white/10 transition cursor-pointer active:scale-95"
+                >
+                  <SkipBack className="w-4 h-4" />
+                  <span>{lang === 'ar' ? 'القناة السابقة' : 'Prev Channel'}</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    cancelAutoSkip();
+                    setHasError(false);
+                    setUseProxyFallback(!useProxyFallback);
+                  }}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/15 text-slate-200 font-bold text-xs border border-white/10 transition cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>{useProxyFallback ? (lang === 'ar' ? 'اتصال مباشر' : 'Direct') : (lang === 'ar' ? 'تجربة بروكسي' : 'Try Proxy')}</span>
+                </button>
+
+                {onOpenDiagnostics && (
+                  <button
+                    onClick={() => {
+                      cancelAutoSkip();
+                      onOpenDiagnostics();
+                    }}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.06] hover:bg-white/15 text-amber-300 font-bold text-xs border border-amber-500/30 transition cursor-pointer"
+                  >
+                    <Wrench className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{lang === 'ar' ? 'سجل الأخطاء' : 'Error Log'}</span>
+                  </button>
+                )}
+              </div>
+
+              <button
+                onClick={() => {
+                  cancelAutoSkip();
+                  onClose();
+                }}
+                className="w-full py-2 rounded-xl text-slate-400 hover:text-white text-xs font-semibold hover:bg-white/5 transition cursor-pointer"
+              >
+                {t.close}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -931,48 +1167,48 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* TOP HEADER HUD */}
       <div
-        className={`absolute top-0 inset-x-0 bg-gradient-to-b from-black/95 via-black/60 to-transparent p-4 sm:p-6 transition-all duration-300 flex items-center justify-between gap-4 z-20 ${
+        className={`absolute top-0 inset-x-0 bg-gradient-to-b from-black/95 via-black/70 to-transparent px-2.5 py-2 sm:px-6 sm:py-5 pt-[max(0.6rem,env(safe-area-inset-top))] transition-all duration-300 flex items-center justify-between gap-2 sm:gap-4 z-20 ${
           showControls ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'
         }`}
       >
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
           {channel.logo && (
             <img
               src={channel.logo}
               alt={channel.name}
               referrerPolicy="no-referrer"
-              className="w-11 h-11 rounded-xl bg-slate-900/90 border border-white/15 object-contain p-1 shrink-0 shadow-lg"
+              className="w-8 h-8 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl bg-slate-900/90 border border-white/15 object-contain p-0.5 sm:p-1 shrink-0 shadow-lg"
             />
           )}
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="font-black text-sm sm:text-base text-white truncate">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <h2 className="font-black text-xs sm:text-base text-white truncate max-w-[130px] sm:max-w-xs md:max-w-md">
                 {channel.name}
               </h2>
               {isLive ? (
-                <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-600 text-white text-[10px] font-black uppercase tracking-wider shadow-sm shadow-red-600/50">
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] sm:text-[10px] font-black uppercase tracking-wider shadow-sm shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
                   {t.liveBadge}
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded-md bg-cyan-500/90 text-slate-950 text-[10px] font-black">
-                  VOD 4K
+                <span className="px-1.5 py-0.5 rounded bg-cyan-500/90 text-slate-950 text-[9px] sm:text-[10px] font-black shrink-0">
+                  VOD
                 </span>
               )}
             </div>
-            <p className="text-xs text-slate-300 truncate mt-0.5">
+            <p className="text-[10px] sm:text-xs text-slate-300 truncate mt-0.5">
               {channel.group} {channel.resolution && `• ${channel.resolution}`}
             </p>
           </div>
         </div>
 
         {/* Top Actions */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Favorite Toggle Star Button */}
           <button
             id="player-favorite-toggle-btn"
             onClick={handleToggleFavorite}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-black backdrop-blur-xl transition cursor-pointer ${
+            className={`flex items-center justify-center p-2 sm:px-3.5 sm:py-2 rounded-xl border text-xs font-black backdrop-blur-xl transition cursor-pointer ${
               isFav
                 ? 'bg-amber-500/20 text-amber-300 border-amber-400/50 shadow-lg shadow-amber-500/20'
                 : 'bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white border-white/15'
@@ -980,8 +1216,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             title={`${isFav ? 'إزالة من المفضلة' : 'إضافة إلى المفضلة'} (F)`}
           >
             <Star className={`w-4 h-4 ${isFav ? 'fill-amber-400 text-amber-400 animate-pulse' : 'text-slate-400'}`} />
-            <span className="hidden sm:inline">{isFav ? (lang === 'ar' ? 'مفضل ⭐' : 'Favorited') : (lang === 'ar' ? 'المفضلة (F)' : 'Favorite (F)')}</span>
+            <span className="hidden md:inline ms-1.5">{isFav ? (lang === 'ar' ? 'مفضل ⭐' : 'Favorited') : (lang === 'ar' ? 'المفضلة' : 'Favorite')}</span>
           </button>
+
+          {/* Quick Zap List Drawer Trigger */}
+          <button
+            onClick={() => setShowQuickZap(!showQuickZap)}
+            className="flex items-center justify-center p-2 sm:px-3.5 sm:py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 border border-white/15 text-xs font-bold backdrop-blur-xl transition cursor-pointer"
+            title="Channels (L)"
+          >
+            <ListFilter className="w-4 h-4 text-cyan-400" />
+            <span className="hidden md:inline ms-1.5">{t.allChannels}</span>
+          </button>
+
+          {/* EPG Drawer Trigger */}
+          {channel.epg && channel.epg.length > 0 && (
+            <button
+              onClick={() => setShowEpgDrawer(!showEpgDrawer)}
+              className="flex items-center justify-center p-2 sm:px-3.5 sm:py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 border border-white/15 text-xs font-bold backdrop-blur-xl transition cursor-pointer"
+              title="EPG Guide (G)"
+            >
+              <Tv className="w-4 h-4 text-emerald-400" />
+              <span className="hidden md:inline ms-1.5">{t.programGuide}</span>
+            </button>
+          )}
 
           {/* Sleep Timer */}
           {sleepRemainingSec !== null && (
@@ -991,36 +1249,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           )}
 
-          {/* Quick Zap List Drawer Trigger */}
+          {/* Phone Rotate Orientation Button */}
           <button
-            onClick={() => setShowQuickZap(!showQuickZap)}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 border border-white/15 text-xs font-bold backdrop-blur-xl transition cursor-pointer"
-            title="Channels (L)"
+            onClick={toggleOrientation}
+            className="sm:hidden p-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-cyan-400 border border-white/15 transition cursor-pointer"
+            title={lang === 'ar' ? 'تدوير الشاشة' : 'Rotate Screen'}
           >
-            <ListFilter className="w-4 h-4 text-cyan-400" />
-            <span className="hidden md:inline">{t.allChannels}</span>
+            <RotateCw className="w-4 h-4" />
           </button>
-
-          {/* EPG Drawer Trigger */}
-          {channel.epg && channel.epg.length > 0 && (
-            <button
-              onClick={() => setShowEpgDrawer(!showEpgDrawer)}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 border border-white/15 text-xs font-bold backdrop-blur-xl transition cursor-pointer"
-              title="EPG Guide (G)"
-            >
-              <Tv className="w-4 h-4 text-emerald-400" />
-              <span className="hidden md:inline">{t.programGuide}</span>
-            </button>
-          )}
 
           {/* Close Button */}
           <button
             id="close-player-btn"
             onClick={onClose}
-            className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-red-600 text-slate-300 hover:text-white border border-white/15 transition cursor-pointer"
+            className="p-2 sm:p-2.5 rounded-xl bg-slate-900/80 hover:bg-red-600 text-slate-300 hover:text-white border border-white/15 transition cursor-pointer shrink-0"
             title={`${t.close} (Esc)`}
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
         </div>
       </div>
@@ -1068,7 +1313,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             initial={{ opacity: 0, x: lang === 'ar' ? 30 : -30 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: lang === 'ar' ? 30 : -30 }}
-            className="absolute top-16 start-4 bottom-24 w-72 sm:w-84 bg-slate-950/95 backdrop-blur-2xl border border-white/15 rounded-3xl shadow-2xl p-4 z-30 flex flex-col"
+            className="absolute top-14 sm:top-16 start-2 sm:start-4 bottom-20 sm:bottom-24 w-[calc(100vw-1rem)] max-w-xs sm:w-84 bg-slate-950/95 backdrop-blur-2xl border border-white/15 rounded-3xl shadow-2xl p-3 sm:p-4 z-30 flex flex-col"
           >
             <div className="flex items-center justify-between pb-3 mb-2 border-b border-slate-800">
               <span className="text-xs font-black text-white flex items-center gap-2">
@@ -1119,7 +1364,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             initial={{ opacity: 0, x: lang === 'ar' ? -30 : 30 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: lang === 'ar' ? -30 : 30 }}
-            className="absolute top-16 end-4 bottom-24 w-84 bg-slate-950/95 backdrop-blur-2xl border border-white/15 rounded-3xl shadow-2xl p-4 z-30 flex flex-col"
+            className="absolute top-14 sm:top-16 end-2 sm:end-4 bottom-20 sm:bottom-24 w-[calc(100vw-1rem)] max-w-xs sm:w-84 bg-slate-950/95 backdrop-blur-2xl border border-white/15 rounded-3xl shadow-2xl p-3 sm:p-4 z-30 flex flex-col"
           >
             <div className="flex items-center justify-between pb-3 mb-2.5 border-b border-slate-800">
               <span className="text-xs font-black text-emerald-400 flex items-center gap-2">
@@ -1221,14 +1466,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* BOTTOM CONTROLS HUD */}
       <div
-        className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/75 to-transparent p-4 sm:p-6 transition-all duration-300 flex flex-col gap-3.5 z-20 ${
+        className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/80 to-transparent p-3 sm:p-6 pb-[max(0.75rem,env(safe-area-inset-bottom))] transition-all duration-300 flex flex-col gap-2.5 sm:gap-3.5 z-20 ${
           showControls ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'
         }`}
       >
         {/* Scrubber Progress Bar for VOD Movies & Series */}
         {!isLive && duration > 0 && (
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono text-cyan-300 font-bold w-12 text-end">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <span className="text-[11px] sm:text-xs font-mono text-cyan-300 font-bold w-10 sm:w-12 text-end">
               {formatTime(currentTime)}
             </span>
             <div className="relative flex-1 flex items-center h-4 group/bar cursor-pointer">
@@ -1244,17 +1489,190 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }
                   setCurrentTime(target);
                 }}
-                className="w-full h-2 bg-slate-700/80 rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none"
+                className="w-full h-1.5 sm:h-2 bg-slate-700/80 rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none"
               />
             </div>
-            <span className="text-xs font-mono text-slate-400 w-12">
+            <span className="text-[11px] sm:text-xs font-mono text-slate-400 w-10 sm:w-12">
               {formatTime(duration)}
             </span>
           </div>
         )}
 
-        {/* Main Controls Row */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* 1. MOBILE ERGONOMIC COMPACT CONTROLS (Small screens: <640px) */}
+        <div className="flex sm:hidden flex-col gap-2.5">
+          {/* Main Playback Center Controls Row */}
+          <div className="flex items-center justify-center gap-4 xs:gap-6">
+            <button
+              onClick={() => zapChannel('prev')}
+              className="p-2 rounded-full bg-white/[0.08] active:bg-white/20 text-slate-200 transition"
+              title="Previous"
+            >
+              <SkipBack className="w-5 h-5" />
+            </button>
+
+            <button
+              onClick={() => seekDelta(-10)}
+              className="p-2 rounded-full bg-white/[0.08] active:bg-white/20 text-slate-200 transition"
+              title="Rewind 10s"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+
+            {/* Play/Pause Button */}
+            <button
+              id="player-play-toggle-btn-mobile"
+              onClick={togglePlay}
+              className="w-12 h-12 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 flex items-center justify-center shadow-xl shadow-cyan-500/30 transform active:scale-90 transition cursor-pointer"
+            >
+              {isPlaying ? (
+                <Pause className="w-6 h-6 fill-current" />
+              ) : (
+                <Play className="w-6 h-6 fill-current translate-x-0.5" />
+              )}
+            </button>
+
+            <button
+              onClick={() => seekDelta(10)}
+              className="p-2 rounded-full bg-white/[0.08] active:bg-white/20 text-slate-200 transition"
+              title="Forward 10s"
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => zapChannel('next')}
+              className="p-2 rounded-full bg-white/[0.08] active:bg-white/20 text-slate-200 transition"
+              title="Next"
+            >
+              <SkipForward className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Bottom Utility Toolbar (Harmonious Mobile Bar without wrapping) */}
+          <div className="flex items-center justify-between px-1 text-slate-300">
+            {/* Audio Mute Toggle */}
+            <button
+              onClick={toggleMute}
+              className="p-2 rounded-xl hover:bg-white/10 active:scale-95 transition"
+              title="Mute"
+            >
+              {isMuted || volume === 0 ? (
+                <VolumeX className="w-4 h-4 text-red-400" />
+              ) : (
+                <Volume2 className="w-4 h-4 text-cyan-400" />
+              )}
+            </button>
+
+            {/* Aspect Ratio cycle */}
+            <button
+              onClick={cycleAspectRatio}
+              className="px-2 py-1 rounded-xl bg-white/[0.08] active:bg-white/15 border border-white/10 text-[10px] font-bold text-cyan-300 flex items-center gap-1 transition"
+              title={`Aspect: ${settings.aspectRatio}`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>{settings.aspectRatio.toUpperCase()}</span>
+            </button>
+
+            {/* Quick Zap List */}
+            <button
+              onClick={() => setShowQuickZap(!showQuickZap)}
+              className="p-2 rounded-xl hover:bg-white/10 active:scale-95 transition"
+              title={t.allChannels}
+            >
+              <ListFilter className="w-4 h-4 text-cyan-400" />
+            </button>
+
+            {/* PiP */}
+            <button
+              onClick={togglePiP}
+              className="p-2 rounded-xl hover:bg-white/10 active:scale-95 transition"
+              title="PiP"
+            >
+              <PictureInPicture className="w-4 h-4" />
+            </button>
+
+            {/* Fullscreen */}
+            <button
+              onClick={toggleFullscreen}
+              className="p-2 rounded-xl hover:bg-white/10 active:scale-95 transition"
+              title={isFullscreen ? t.exitFullScreen : t.fullScreen}
+            >
+              {isFullscreen ? (
+                <Minimize className="w-4 h-4 text-cyan-400" />
+              ) : (
+                <Maximize className="w-4 h-4" />
+              )}
+            </button>
+
+            {/* More Mobile Options Menu Popover */}
+            <div className="relative">
+              <button
+                onClick={() => setShowMobileMoreMenu(!showMobileMoreMenu)}
+                className={`p-2 rounded-xl transition ${
+                  showMobileMoreMenu ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30' : 'hover:bg-white/10'
+                }`}
+                title="More"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+
+              {showMobileMoreMenu && (
+                <div className="absolute bottom-full mb-2 end-0 w-48 bg-slate-900/95 border border-white/15 rounded-2xl shadow-2xl p-2 z-50 text-xs backdrop-blur-xl animate-in fade-in zoom-in-95">
+                  <div className="space-y-1">
+                    <button
+                      onClick={() => {
+                        setShowMobileMoreMenu(false);
+                        takeScreenshot();
+                      }}
+                      className="w-full text-start p-2 rounded-xl hover:bg-white/10 flex items-center gap-2 text-slate-200"
+                    >
+                      <Camera className="w-4 h-4 text-cyan-400" />
+                      <span>{t.screenshot}</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setShowMobileMoreMenu(false);
+                        setShowStatsModal(true);
+                      }}
+                      className="w-full text-start p-2 rounded-xl hover:bg-white/10 flex items-center gap-2 text-slate-200"
+                    >
+                      <Activity className="w-4 h-4 text-emerald-400" />
+                      <span>{t.diagnostics}</span>
+                    </button>
+
+                    <div className="pt-1 border-t border-slate-800">
+                      <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase">
+                        {t.sleepTimer}
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 px-1">
+                        {[15, 30, 60].map(mins => (
+                          <button
+                            key={mins}
+                            onClick={() => {
+                              setSleepTimer(mins);
+                              setShowMobileMoreMenu(false);
+                            }}
+                            className={`py-1 rounded-lg text-center font-bold text-[10px] ${
+                              sleepTimerMinutes === mins
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-slate-800 text-slate-300'
+                            }`}
+                          >
+                            {mins}m
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 2. TABLET / DESKTOP CONTROLS ROW (Screens >= 640px) */}
+        <div className="hidden sm:flex flex-wrap items-center justify-between gap-3">
           {/* Left: Playback, Zapping & Seek */}
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Prev Channel Zap */}
@@ -1441,9 +1859,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         </div>
 
-        {/* TV REMOTE CONTROLS QUICK BAR */}
+        {/* TV REMOTE CONTROLS QUICK BAR (Large Desktop / TV Only) */}
         {showRemoteHelp && (
-          <div className="flex items-center justify-center gap-3 pt-2 border-t border-white/[0.08] text-[11px] text-slate-400 overflow-x-auto scrollbar-none">
+          <div className="hidden md:flex items-center justify-center gap-3 pt-2 border-t border-white/[0.08] text-[11px] text-slate-400 overflow-x-auto scrollbar-none">
             <span className="flex items-center gap-1">
               <span className="px-1.5 py-0.5 rounded bg-white/10 font-mono text-[10px] text-cyan-300">Enter / Space</span>
               <span>{lang === 'ar' ? 'تشغيل/إيقاف' : 'Play/Pause'}</span>

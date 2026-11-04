@@ -30,6 +30,10 @@ export interface PlaylistItem {
   year?: number;
   rating?: number;
   genres?: string[];
+  director?: string;
+  cast?: string[];
+  trailerYoutubeKey?: string;
+  isKidsSafe?: boolean;
   seriesInfo?: {
     season: number;
     episode: number;
@@ -61,6 +65,8 @@ export interface PlayerSettings {
   proxyStreams: boolean;
   theme: 'cinematic' | 'midnight' | 'emerald';
   pipSupported: boolean;
+  kidsModeActive?: boolean;
+  parentalPin?: string;
 }
 
 export interface MultiSlot {
@@ -77,6 +83,7 @@ export interface WatchProgress {
   currentTime: number; // in seconds
   duration: number; // in seconds
   progressPercent: number; // 0 to 100
+  percentage?: number; // alias for progressPercent
   lastWatchedAt: number; // timestamp in ms
   completed: boolean; // true if > 92%
 }
